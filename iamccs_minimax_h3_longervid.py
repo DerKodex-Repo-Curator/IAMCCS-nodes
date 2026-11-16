@@ -128,10 +128,13 @@ def _final_visible_handover(handover: dict[str, Any] | None, total_frames: int) 
 
 
 def _checkpoint_run_dir(unique_id: Any) -> tuple[Path, str]:
+    from .iamccs_h3_output_storage import active_segment_directory
+
     stamp = int(time.time() * 1000)
     node = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(unique_id or "continuous"))
     run = f"continuous_{node}_{stamp}"
-    root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "ContinuousAV" / run
+    legacy = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "ContinuousAV"
+    root = active_segment_directory(legacy, "ContinuousAV") / run
     root.mkdir(parents=True, exist_ok=True)
     return root, run
 
@@ -156,19 +159,21 @@ def _publish_checkpoint(unique_id: Any, run: str, path: Path, label: str, index:
         LOG.warning("Continuous AV live checkpoint publish failed: %s", exc)
 
 
-def _reset_checkpoint_run(run: str) -> int:
+def _reset_checkpoint_run(run: str, managed_root=None) -> int:
     run = str(run or "").strip()
     if not run.startswith("continuous_") or Path(run).name != run:
         raise ValueError("Invalid Continuous AV checkpoint run")
-    root = (Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "ContinuousAV").resolve()
-    target = (root / run).resolve()
-    if target.parent != root:
-        raise ValueError("Continuous AV checkpoint run must stay inside the output folder")
-    if not target.exists():
-        return 0
-    removed = sum(1 for path in target.rglob("*") if path.is_file())
-    shutil.rmtree(target)
-    return removed
+    output = Path(folder_paths.get_output_directory()).resolve()
+    legacy = output / "IAMCCS" / "MiniMaxH3" / "ContinuousAV"
+    for root in (legacy,) if managed_root is None else (managed_root, legacy):
+        target = root / run
+        if not target.is_relative_to(output) or target.resolve() != target or target.is_symlink():
+            raise ValueError("Continuous AV checkpoint run must stay inside the output folder")
+        if target.is_dir():
+            removed = sum(1 for path in target.rglob("*") if path.is_file())
+            shutil.rmtree(target)
+            return removed
+    return 0
 
 
 def _register_reset_route() -> None:
@@ -191,7 +196,9 @@ def _register_reset_route() -> None:
             )
         payload = await request.json()
         try:
-            removed = _reset_checkpoint_run(payload.get("run", ""))
+            from .iamccs_h3_output_storage import continuous_segment_directory
+
+            removed = _reset_checkpoint_run(payload.get("run", ""), continuous_segment_directory())
         except ValueError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
         return web.json_response({"ok": True, "removed_files": removed})

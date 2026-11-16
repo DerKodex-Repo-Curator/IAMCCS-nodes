@@ -10,7 +10,6 @@ const NODE_TYPE = "IAMCCS_ShotboardH3SettingsPro";
 const SHOTBOARD_TYPE = "IAMCCS_MiniMaxH3ShotPlanner";
 const BRIDGE_TYPES = new Set(["IAMCCS_CineH3Input", "IAMCCS_CineH3FunControlInput", "IAMCCS_MiniMaxH3FunControlInput"]);
 const SHOTBOARD_OWNED = new Set(["task_mode"]);
-const OPEN_H3_REFINE_FIELDS = ["h3_open_refine_enabled", "h3_open_refine_scale", "h3_open_refine_model_name", "h3_open_refine_precision", "h3_open_refine_device", "h3_open_refine_temporal_chunking", "h3_open_refine_lora_name", "h3_open_refine_strength", "h3_open_refine_distill_lora_name", "h3_open_refine_distill_strength", "h3_open_refine_sigma_preset", "h3_open_refine_custom_sigmas", "h3_open_refine_seed", "h3_open_refine_prompt"];
 const AUTO_IMPORT_BLOCKED = new Set([
   "global_prompt", "timeline_data", "image_paths", "frame_rate", "audio_mode",
   "guide_policy", "min_guide_gap_seconds", "max_guides", "default_force", "promptrelay_epsilon",
@@ -46,9 +45,10 @@ const COMPATIBILITY_ONLY = new Set([
   "image_resize_method", "image_multiple_of", "img_compression",
 ]);
 const GROUPS = [
+// MOVE disabled:   { id: "engine_move", label: "IAMCCS MOVE", title: "IAMCCS MOVE · Authored paths / masked video", modeEngine: true, fields: ["h3_move_operation", "h3_move_guide_path", "h3_move_mask_path", "h3_move_release_step", "h3_move_edge_freedom", "h3_move_mask_grow", "h3_move_feather", "h3_move_audio_policy", "h3_move_sampler_override"] },
   { id: "continuity_guard", label: "CONTINUITY MONITOR", title: "Read-only Extended AV diagnostics. Repair has been retired; this monitor does not prevent degradation.", modeEngine: true, fields: ["h3_guard_mode", "h3_guard_detail_ratio"] },
   { id: "ahead", label: "AHEAD CONTROL ROOM", title: "LatentGoAhead seam controls", fields: [] },
-  { id: "extension", label: "LONG TAKE · EXTEND", title: "Automatic native AV extension for one authored shot beyond 15 seconds", modeEngine: true, fields: ["extended_av_profile", "extended_av_custom_window_frames", "extended_av_custom_overlap_frames"] },
+  { id: "extension", label: "LONG TAKE · EXTEND", title: "Automatic native AV extension for one authored shot beyond 15 seconds", modeEngine: true, fields: ["extended_av_window_policy", "extended_av_profile", "extended_av_custom_window_frames", "extended_av_custom_overlap_frames"] },
   { id: "continuation", label: "SAVED TAKE · CONTINUATION", title: "Start a new generation from a previously saved AV checkpoint", fields: ["h3_continuation_enabled", "h3_continuation_save_enabled", "h3_continuation_checkpoint", "h3_continuation_context_frames", "h3_continuation_handover_mode", "h3_continuation_manual_tail_frames", "h3_continuation_visual_handover", "h3_continuation_run_and_gun_enabled", "h3_continuation_run_and_gun_join", "h3_continuation_soft_video_frames", "h3_continuation_soft_video_curve", "h3_continuation_soft_audio_ms"] },
   { id: "refmod", label: "REFMOD", title: "Reference latent library", fields: ["h3_refmod_enabled", "h3_refmod_name", "h3_refmod_strength", "h3_refmod_retention", "h3_refmod_max_tokens"] },
   { id: "assistant", label: "MODE ASSISTANT", title: "Guided setup", assistant: true, fields: [] },
@@ -66,7 +66,7 @@ const GROUPS = [
   { id: "engine_object_swap", label: "OBJECT SWAP", title: "Object Swap · V2VA engine", modeEngine: true, fields: ["audio_mode", "v2v_guide_mode", "v2v_source_range_policy", "v2v_source_offset_seconds", "v2v_source_fit", "v2v_source_end_policy", "v2v_audio_pairing", "reference_role_1", "reference_role_2"] },
   { id: "overview", label: "1 · NATIVE", title: "Native H3 canvas and programme duration", fields: ["duration_seconds", "width", "height", "upscale_link_to_native", "upscale_link_factor", "reference_resize_policy", "reference_resize_megapixels", "reference_resize_filter", "prompt_mapping"] },
   { id: "audio", label: "2 · AUDIO", title: "Audio authority and EXTEND seam polish", fields: ["audio_mode", "reference_audio_role", "voice_reference_picture_index", "extended_av_soft_audio_handover_ms", "extended_av_boundary_polish_ms", "extended_av_boundary_polish_strength"] },
-  { id: "memory", label: "3 · MEMORY", title: "VRAM preset", fields: ["performance_profile", "motion_context_window_frames", "text_encoder_device", "h3_exact_profile", "h3_exact_chunk_rows", "h3_exact_precision_mode", "h3_exact_qkv_streaming", "h3_exact_attention_memory", "h3_clipproj_profile", "h3_clipproj_load_mode", "vram_clean_before_decode"] },
+  { id: "memory", label: "3 · MEMORY", title: "VRAM preset", fields: ["performance_profile", "motion_context_window_frames", "text_encoder_device", "h3_exact_profile", "h3_exact_chunk_rows", "h3_exact_precision_mode", "h3_exact_qkv_streaming", "h3_exact_attention_memory", "h3_clipproj_profile", "h3_clipproj_load_mode", "vram_clean_before_decode", "h3_video_decoder"] },
   { id: "sampling", label: "4 · SAMPLE", title: "Native H3 sampling", fields: ["seed", "seed_policy", "seed_stride", "steps", "sampler_name", "scheduler", "denoise", "shift_video", "shift_audio"] },
 { id: "speed", label: "5 · SPEED", title: "Acceleration recipe", fields: ["h3_attention_backend", "h3_veda_enabled", "h3_veda_predictor", "h3_veda_verbose", "acceleration", "turbo_mode", "turbo_lora_name", "turbo_strength", "turbo_sampler_mode", "fused_turbo_model_name", "fused_turbo_sigma_preset", "pdd_lora_name", "pdd_strength", "secondary_lora_enabled", "secondary_lora_name", "secondary_lora_strength", "secondary_lora_continuation_only", "pika_flex_fl2va_lora", "pika_flex_ref2va_lora", "ref_image_size", "sol_conditioning", "spectrum_profile", "h3_sla_sparsity", "h3_sla_dense_last_steps"] },
   { id: "direction", label: "6 · DIRECT · LEGACY", title: "Legacy Direct compatibility", fields: ["reference_role_1", "reference_role_2", "reference_role_3", "reference_role_4", "reference_video_role", "v2v_guide_mode", "v2v_source_range_policy", "v2v_source_offset_seconds", "v2v_source_fit", "v2v_source_end_policy", "v2v_audio_pairing", "flf_join_mode", "flf_overlap_frames", "flf_continuity_mode", "flf_continuity_tail_frames", "flf_continuity_audio", "longvid_guide_window_policy", "keyframe_joint_latent_new", "longvid_terminal_endpoint_mode", "longvid_pianosequenza_2stage_enabled"] }, // IAMCCS_LONGVID_ENDPOINT_STRATEGIES_V1
@@ -76,23 +76,30 @@ const GROUPS = [
   { id: "face", label: "SAM3 SWAP", title: "SAM3 Subject Swap", contextual: "face", modeEngine: true, fields: ["h3_faceswap_generate_new_audio", "h3_faceswap_sam_model", "h3_faceswap_birefnet_model", "h3_faceswap_mask_prompt", "h3_faceswap_threshold", "h3_faceswap_objects", "h3_faceswap_cleanup_threshold", "h3_faceswap_cleanup_shrink", "h3_faceswap_cleanup_min_frames", "h3_faceswap_cleanup_edge_grow", "h3_faceswap_crop_scale", "h3_faceswap_crop_megapixels", "h3_faceswap_grow_spatial", "h3_faceswap_grow_temporal", "h3_faceswap_feather"] },
   { id: "face_refine", label: "FACE REFINE", title: "Face Refinement", fields: ["face_detailer_enabled", "face_detailer_profile", "face_detailer_mode", "face_detailer_max_faces", "face_detailer_min_coverage", "face_detailer_use_sam_mask", "face_detailer_canvas_width", "face_detailer_canvas_height", "face_detailer_crop_factor", "face_detailer_confidence", "face_detailer_steps", "face_detailer_denoise", "face_detailer_window_frames", "face_detailer_window_overlap", "face_detailer_strength_small_face", "face_detailer_strength_large_face", "face_detailer_blend", "face_detailer_paste_region", "face_detailer_feather"] },
   { id: "scout", label: "SCOUT", title: "Candidate seed scout", fields: ["h3_r40_seed_scout_enabled", "h3_r40_candidate_count", "h3_r40_seed_stride", "h3_r40_preview_max_frames", "h3_r40_sparse_enabled", "h3_r40_sparse_video_budget", "h3_r40_sparse_denser_edges"] },
-  { id: "finish", label: "7 · OUTPUT", title: "Delivery", fields: ["h3_editor_enabled", "upscale_mode", "upscale_enabled", "upscale_width", "upscale_height", "h3_pixel_tiled_method", "h3_pixel_tiled_model_name", "h3_pixel_tiled_tile_size", "h3_pixel_tiled_overlap", "upscale_prompt", "upscale_sage", "upscale_seed_offset", "wan_upscale_denoise", "ltx_seam_safe", "ltx_detailer_enabled", "ltx_detailer_lora_name", "ltx_detailer_strength", "ltx_4k_enabled", "ltx_4k_quality", "ltx_looper_temporal_tile_size", "ltx_looper_temporal_overlap", "ltx_looper_guiding_strength", "ltx_looper_overlap_strength", "ltx_looper_cond_image_strength", "ltx_looper_horizontal_tiles", "ltx_looper_vertical_tiles", "ltx_looper_spatial_overlap", "h3_upres_model_name", "h3_upres_precision", "h3_upres_device", "h3_upres_keep_models_resident", "h3_fast_latent_temporal_chunk", "h3_fast_latent_stage2_window", "h3_fast_latent_stage2_overlap", "h3_fast_latent_stage2_guides", "h3_upres_seed", "h3_upres_steps", "h3_upres_denoise", "h3_upres_sampler", "h3_upres_scheduler", "h3_upres_temporal_chunk", "h3_upres_temporal_overlap", "h3_upres_anchor_strength", "h3_upres_tile_width", "h3_upres_tile_height", "h3_upres_overlap_width", "h3_upres_overlap_height", "h3_upres_fade_width", "h3_upres_fade_height", "h3_upres_min_tile_size", "h3_upres_overlap_mode", "h3_upres_overlap_blend", "h3_upres_rtx_enabled", "h3_upres_rtx_quality", "h3_upres_pixel_groups", "h3_upres_window_frames", "h3_upres_window_overlap", "h3_upres_pixel_method"] },
+  { id: "finish", label: "7 · OUTPUT", title: "Delivery", fields: ["h3_editor_enabled", "upscale_mode", "upscale_enabled", "upscale_width", "upscale_height", "h3_pixel_tiled_method", "h3_pixel_tiled_model_name", "h3_pixel_tiled_tile_size", "h3_pixel_tiled_overlap", "upscale_prompt", "upscale_sage", "upscale_seed_offset", "wan_upscale_denoise", "ltx_seam_safe", "ltx_detailer_enabled", "ltx_detailer_lora_name", "ltx_detailer_strength", "ltx_4k_enabled", "ltx_4k_quality", "ltx_looper_temporal_tile_size", "ltx_looper_temporal_overlap", "ltx_looper_guiding_strength", "ltx_looper_overlap_strength", "ltx_looper_cond_image_strength", "ltx_looper_horizontal_tiles", "ltx_looper_vertical_tiles", "ltx_looper_spatial_overlap", "h3_upres_model_name", "h3_upres_precision", "h3_upres_device", "h3_upres_keep_models_resident", "h3_fast_latent_temporal_chunk", "h3_fast_latent_stage2_window", "h3_fast_latent_stage2_overlap", "h3_fast_latent_stage2_guides", "h3_fast_latent_stage2_native_windows", "h3_upres_seed", "h3_upres_steps", "h3_upres_denoise", "h3_upres_sampler", "h3_upres_scheduler", "h3_upres_temporal_chunk", "h3_upres_temporal_overlap", "h3_upres_anchor_strength", "h3_upres_tile_width", "h3_upres_tile_height", "h3_upres_overlap_width", "h3_upres_overlap_height", "h3_upres_fade_width", "h3_upres_fade_height", "h3_upres_min_tile_size", "h3_upres_overlap_mode", "h3_upres_overlap_blend", "h3_upres_rtx_enabled", "h3_upres_rtx_quality", "h3_upres_pixel_groups", "h3_upres_window_frames", "h3_upres_window_overlap", "h3_upres_pixel_method"] },
   { id: "advanced", label: "TECHNICAL", title: "Technical controls", dynamic: true, fields: [] },
 ];
-GROUPS.find(group => group.id === "finish").fields.push(...OPEN_H3_REFINE_FIELDS);
+const OPEN_H3_REFINE_FIELDS = ["h3_open_refine_enabled", "h3_open_refine_scale", "h3_open_refine_model_name", "h3_open_refine_precision", "h3_open_refine_device", "h3_open_refine_temporal_chunking", "h3_open_refine_lora_name", "h3_open_refine_strength", "h3_open_refine_distill_lora_name", "h3_open_refine_distill_strength", "h3_open_refine_sigma_preset", "h3_open_refine_custom_sigmas", "h3_open_refine_seed", "h3_open_refine_prompt"];
+const FINAL_FINISH_GROUPS = [
+  ["RelayVSR", ["h3_final_relay_enabled", "h3_final_relay_scale", "h3_final_relay_detail"]],
+  ["ReCaVSR", ["h3_final_reca_enabled", "h3_final_reca_scale", "h3_final_reca_color_fix", "h3_final_reca_kv_offload"]],
+  ["DLSS5", ["h3_final_dlss_enabled", "h3_final_dlss_style", "h3_final_dlss_intensity", "h3_final_dlss_tone", "h3_final_dlss_structure", "h3_final_dlss_skin", "h3_final_dlss_skin_mask"]],
+];
+const FINAL_FINISH_FIELDS = ["h3_vsr_per_segment", ...FINAL_FINISH_GROUPS.flatMap(([, fields]) => fields)];
+GROUPS.find(group => group.id === "finish").fields.push(...OPEN_H3_REFINE_FIELDS, ...FINAL_FINISH_FIELDS);
 const ENGINE_IDS = Object.freeze(GROUPS.filter((group) => group.modeEngine || ["ahead", "continuation", "refmod", "face_refine", "scout"].includes(group.id)).map((group) => group.id));
 const ENGINE_ID_SET = new Set(ENGINE_IDS);
 const ASSIGNED = new Set(GROUPS.flatMap((group) => group.fields));
 const FUNCTIONAL_LAYOUT = {
   extension: [
-    ["EXTENDED AV · MASKED + EXACT", ["extended_av_profile", "extended_av_custom_window_frames", "extended_av_custom_overlap_frames"]],
+    ["EXTENDED AV · MASKED + EXACT", ["extended_av_window_policy", "extended_av_profile", "extended_av_custom_window_frames", "extended_av_custom_overlap_frames"]],
   ],
   audio: [
     ["AUDIO AUTHORITY", ["audio_mode", "reference_audio_role", "voice_reference_picture_index"]],
     ["EXTEND · SOFT AV SEAM", ["extended_av_soft_audio_handover_ms", "extended_av_boundary_polish_ms", "extended_av_boundary_polish_strength"]],
   ],
   memory: [
-    ["VRAM PRESET", ["performance_profile", "motion_context_window_frames", "text_encoder_device", "vram_clean_before_decode"]],
+    ["VRAM PRESET", ["performance_profile", "motion_context_window_frames", "text_encoder_device", "vram_clean_before_decode", "h3_video_decoder"]],
     ["ATTENTION MEMORY", ["h3_exact_profile", "h3_exact_chunk_rows", "h3_exact_precision_mode", "h3_exact_qkv_streaming", "h3_exact_attention_memory"]],
     ["CLIPPROJ", ["h3_clipproj_profile", "h3_clipproj_load_mode"]],
   ],
@@ -125,7 +132,7 @@ const FUNCTIONAL_LAYOUT = {
     ["PIXEL SAFE · LOW VRAM", ["h3_pixel_tiled_method", "h3_pixel_tiled_model_name", "h3_pixel_tiled_tile_size", "h3_pixel_tiled_overlap"]],
     ["LTX DELIVERY", ["ltx_seam_safe", "ltx_detailer_enabled", "ltx_detailer_lora_name", "ltx_detailer_strength", "ltx_4k_enabled", "ltx_4k_quality", "ltx_looper_temporal_tile_size", "ltx_looper_temporal_overlap", "ltx_looper_guiding_strength", "ltx_looper_overlap_strength", "ltx_looper_cond_image_strength", "ltx_looper_horizontal_tiles", "ltx_looper_vertical_tiles", "ltx_looper_spatial_overlap"]],
     ["H3 2-PASS MODEL", ["h3_upres_model_name", "h3_upres_precision", "h3_upres_device", "h3_upres_keep_models_resident"]],
-    ["FAST LATENT GPU BUDGET", ["h3_fast_latent_temporal_chunk", "h3_fast_latent_stage2_window", "h3_fast_latent_stage2_overlap", "h3_fast_latent_stage2_guides"]],
+    ["FAST LATENT GPU BUDGET", ["h3_fast_latent_stage2_native_windows", "h3_fast_latent_temporal_chunk", "h3_fast_latent_stage2_window", "h3_fast_latent_stage2_overlap", "h3_fast_latent_stage2_guides"]],
     ["H3 DETAIL / SECOND-PASS SAMPLING", ["h3_upres_seed", "h3_upres_steps", "h3_upres_denoise", "h3_upres_sampler", "h3_upres_scheduler", "h3_upres_anchor_strength"]],
     ["TEMPORAL WINDOWS", ["h3_upres_temporal_chunk", "h3_upres_temporal_overlap"]],
     ["SPATIAL TILES", ["h3_upres_tile_width", "h3_upres_tile_height", "h3_upres_overlap_width", "h3_upres_overlap_height", "h3_upres_fade_width", "h3_upres_fade_height", "h3_upres_min_tile_size", "h3_upres_overlap_mode", "h3_upres_overlap_blend"]],
@@ -134,6 +141,7 @@ const FUNCTIONAL_LAYOUT = {
   ],
 };
 const MODE_CHOICES = [
+// MOVE disabled:   ["IAMCCS MOVE", "iamccs_move", "Animate an isolated subject along an authored path, or regenerate a tracked video region. Synchronized 24 fps source and mask guides, R49 Settings PRO acceleration, native audio and delivery. Configure Engine > IAMCCS MOVE."],
   ["IMAGE GENERATOR · REFERENCES", "reference_image", "Create one exact 4K still through the R42 SatoDive branch. The reference can come from a Prompter REF2V visual followed by Inject, or from the direct image socket. Optional same-size Skin Detail is controlled by Settings PRO and is off by default."],
   ["9 · AUTO · READ CURRENT SHOTBOARD", "auto_from_shotboard", "Import the board's current generation settings once; Settings PRO then becomes the technical master, including duration, and syncs that duration back to Shotboard. Prompts, guides, media and audio remain Shotboard truth."],
   ["1 · T2VA · TEXT / HARD-CUT SHOTS", "t2va", "Text-only shots. Separate authored slots remain hard cuts."],
@@ -143,7 +151,6 @@ const MODE_CHOICES = [
   ["3 · FLF · KEYFRAME-TO-KEYFRAME", "fl2va_stable", "A→B, B→C with authored destination keyframes. This is not long-take extension."],
   ["4 · FL2VA · KEYFRAME CHAIN + NATIVE AV", "fl2va_continuous", "Carry a native AV context between authored FL2VA destination chunks; distinct from automatic long-take extension."],
   ["REF2VA · VFX EDIT", "ref2va_vfx_edit", "Edit a source video with the VFX LoRA and aligned AddGuide; native or shared second-pass delivery."],
-  ["FASTH3 OMNI · 8 STEP", "ref2va_omni", "Full Omni checkpoint: one joint AV target up to 362 frames. Longer timelines use experimental LongVid AV-tail windows with Soft AV handover. Ordered image, video and voice references; dedicated loader."],
   ["7 · REF2VA · REFERENCES", "ref2va", "Reference blocks for identity, object or style; no temporal carry."],
   ["8 · REF2VID · AUDIO PERFORMANCE", "ref2vid_lipsync", "Reference image plus one locked AudioBoard performance per hard-cut shot."],
   ["10 · LONG MULTI-SHOT · FL2VA", "longvid_multishot_hardcut", "Choose joint native multi-shot or isolated camera shots for exact editorial cuts. Isolated shots discard a generated tail handle and use each local shot prompt; Custom Audio keeps the full performance on one timeline."],
@@ -160,12 +167,13 @@ const MODE_CHOICES = [
   ["SUBJECT SWAP -LorA", "v2va_face_swap_lora", "Replace the character through full-frame Ref2VA and character/realism LoRAs. Source video + Picture 1; no SAM tracking or crop."],
 ];
 const UNLISTED_MODES = new Set(["reference_image"]);
-const HIDDEN_MODES = new Set(["latent_go_ahead", "longvid_guides", "longvid_motion_context", "longvid_continuous_guided", "longvid_masked_loop_guided", "guided_av_loop_experimental"]);
+const HIDDEN_MODES = new Set(["iamccs_move", "latent_go_ahead", "longvid_guides", "longvid_motion_context", "longvid_continuous_guided", "longvid_masked_loop_guided", "guided_av_loop_experimental"]);
 const MODE_ENGINE_GROUP = Object.freeze({
+// MOVE disabled:   iamccs_move: "engine_move",
   reference_image: "engine_reference_image", t2va: "engine_t2va", i2va: "engine_i2va",
   fl2va_stable: "engine_flf", fl2va_continuous: "engine_flf_continuous",
   fl2va_extended_av: "extension", t2va_continuous: "extension",
-  ref2va_vfx_edit: "vfx_edit", ref2va_omni: "engine_ref2va", ref2va: "engine_ref2va", ref2vid_lipsync: "engine_ref2vid",
+  ref2va_vfx_edit: "vfx_edit", ref2va: "engine_ref2va", ref2vid_lipsync: "engine_ref2vid",
   longvid_multishot_hardcut: "engine_multishot", longvid_keyframe_continuous: "engine_true_long",
   pianosequenza_true_long: "engine_true_long",
   keyframe_joint_native: "engine_keyframe_joint", v2va_controlnet: "control",
@@ -301,6 +309,28 @@ const H3_DELIVERY_MODES = Object.freeze([
   ["h3_latent_upres","H3 LATENT UPRES · legacy branch",null],
   ["wan22_5b","WAN 2.2 · 5B",null],
 ]);
+const H3_PLATE_PROFILES = Object.freeze([
+  ["up_to_12gb", "≤12 GB · 22F / 320×320"],
+  ["over_12_under_24gb", ">12–<24 GB · 39F / 512×384"],
+  ["24gb", "24 GB · 73F / 768×512"],
+  ["over_24gb", ">24 GB · 124F / 960×544"],
+]);
+function plateProfile(node) {
+  return String(widget(node, "h3_plate_refine_profile")?.value || "off");
+}
+function plateRefineAvailable(node) {
+  return Boolean(widget(node, "h3_plate_refine_profile"))
+    && Boolean(widget(node, "h3_plate_refine_sigmas"))
+    && deliveryModeAvailable(node, "h3_fast_latent_2pass")
+    && connectedNodes(node).some(candidate => nodeClass(candidate) === "IAMCCS_MiniMaxH3UniversalFastR42"
+      && candidate.inputs?.some(input => input.name === "plate_refine_model" && input.link != null));
+}
+function applyLinkedDeliveryPair(node, pair) {
+  const [lw,lh,hw,hh] = pair.split(/->|x/).map(Number);
+  for (const [name,value] of Object.entries({width:lw,height:lh,image_width:lw,image_height:lh,upscale_width:hw,upscale_height:hh})) setValue(node,name,value,false);
+  node.properties ||= {};
+  node.properties.iamccs_fast_2pass_pair = pair;
+}
 function deliveryResolutionGrid(mode) {
   return ["pixel_tiled_low_vram","rtx_final"].includes(mode) ? 8 : 32;
 }
@@ -317,6 +347,7 @@ function normalizeDeliveryResolution(node, mode = String(widget(node,"upscale_mo
   }
 }
 function selectDeliveryMode(node, mode) {
+  if (mode === "h3_plate_refine") return applyRecipe(node, "plate-refine");
   if (!deliveryModeAvailable(node,mode)) return false;
   const option = H3_DELIVERY_MODES.find(([key]) => key === mode);
   if (!option) return false;
@@ -394,6 +425,15 @@ function setSubjectReferenceCount(node, count) {
   }
   document.dispatchEvent(new CustomEvent("iamccs:h3-settings-changed", { detail: { source_node_id: node.id, field: "reference_roles" } }));
 }
+function applyVbvrPreset(node) {
+  const file = choices(widget(node, "secondary_lora_name")).find(name => /(?:^|[\\/])H3-Licon-VBVR-I2V\.safetensors$/i.test(String(name)));
+  if (!file) throw new Error("Install the complete H3-Licon-VBVR-I2V adapter and refresh model choices.");
+  setValue(node, "secondary_lora_enabled", true, false);
+  setValue(node, "secondary_lora_name", file, false);
+  setValue(node, "secondary_lora_strength", 1.0, false);
+  setValue(node, "secondary_lora_continuation_only", false, false);
+  document.dispatchEvent(new CustomEvent("iamccs:h3-settings-changed", { detail: { source_node_id: node.id, recipe: "vbvr_full" } }));
+}
 function choices(item) {
   let values = item?.options?.values;
   try { if (typeof values === "function") values = values(); } catch { values = []; }
@@ -408,7 +448,9 @@ function human(name) {
     ltx_looper_horizontal_tiles: "LTX horizontal tiles · minimum",
     ltx_looper_vertical_tiles: "LTX vertical tiles · minimum",
     ltx_looper_spatial_overlap: "LTX spatial overlap",
-    extended_av_profile: "EXTENSION PROFILE · VRAM / window",
+    h3_video_decoder: "NATIVE-STAGE VIDEO DECODER · auto load",
+    extended_av_window_policy: "SEGMENT LENGTH · max_native / profile",
+    extended_av_profile: "EXTENSION PROFILE · context / optional window",
     extended_av_pin_mode: "EXTENSION · ROLE (legacy/locked)",
     extended_av_mask_profile: "VIDEO HOLD · mask profile",
     extended_av_custom_window_frames: "CUSTOM · technical window frames",
@@ -601,6 +643,10 @@ function connectedNodes(node) {
 function branchGate(node, name) {
   const classes = node._iamccsSettingsProConnectedClasses || connectedNodes(node).map(nodeClass);
   const has = (pattern) => classes.some((value) => pattern.test(value));
+  if (name.startsWith("h3_final_") || name === "h3_vsr_per_segment") return {
+    available: has(/^IAMCCS_MiniMaxH3EditorOptionalFinalR45$/),
+    reason: "Connect the R49 Final Master gate to enable final finishing.",
+  };
   if (name.startsWith("h3_open_refine_")) return {
     available: has(/^IAMCCS_MiniMaxH3OpenRefineControl$/),
     reason: "Load the R49 Open-H3 workflow with its connected refinement settings branch.",
@@ -907,7 +953,6 @@ function importSettingsFromShotboard(node) {
 }
 function assistantModeKey(node, mode = shotboardMode(node)) {
   if (node.properties?.iamccs_auto_from_shotboard_active) return "auto_from_shotboard";
-  if (String(mode) === "ref2va" && widget(node, "h3_omni_enabled")?.value) return "ref2va_omni";
   if (String(mode) !== "fl2va") return String(mode);
   const board = linkedShotboard(node);
   return String(widget(board || node, "flf_continuity_mode")?.value || "stable_keyframes") === "native_av_context"
@@ -971,8 +1016,8 @@ function setAssistantMode(node, key) {
   }
   // Only the two legacy FL2VA assistant aliases map back to the historical
   // `fl2va` task. Extended AV is a real independent backend mode.
-  setValue(node, "h3_omni_enabled", key === "ref2va_omni", false);
-  const actualMode = key === "ref2va_omni" ? "ref2va" : ["fl2va_stable", "fl2va_continuous"].includes(String(key)) ? "fl2va" : key;
+  const actualMode = ["fl2va_stable", "fl2va_continuous"].includes(String(key)) ? "fl2va" : key;
+  if (actualMode !== "ref2va") setValue(node, "h3_omni_enabled", false, false);
   setShotboardMode(node, actualMode);
   if (node.properties.iamccs_r49_all_modes) {
     for (const target of connectedNodes(node)) {
@@ -980,7 +1025,6 @@ function setAssistantMode(node, key) {
       if (Array.isArray(modes)) target.mode = modes.includes(actualMode) ? 0 : 2;
     }
   }
-  if (key === "ref2va_omni") applyRecipe(node, "omni");
   if (key === "v2va_controlnet") applyRecipe(node, "control");
   if (key === "v2va_face_swap") applyRecipe(node, "face");
   if (String(key) === "reference_image") {
@@ -1048,8 +1092,12 @@ function setAssistantMode(node, key) {
   node._iamccsSettingsProRefresh?.(); return true;
 }
 function modeContext(mode) { const value = String(mode).toLowerCase(); return value === "v2va_face_swap_lora" ? "swap_lora" : value.includes("controlnet") ? "control" : value.includes("face_swap") ? "face" : "core"; }
-function modeFamily(mode) {
-  const value = String(mode).toLowerCase();
+function nativeMode(mode, node) {
+  // MOVE native-mode routing is disabled.
+  return String(mode).toLowerCase();
+}
+function modeFamily(mode, node) {
+  const value = node ? nativeMode(mode, node) : String(mode).toLowerCase();
   return value.includes("ref2") || ["reference_image", "v2va_object_swap", "v2va_face_swap", "v2va_face_swap_lora"].includes(value) ? "ref2" : "fl2";
 }
 function h3AssetDescriptor(node, field, selectedName) {
@@ -1068,7 +1116,7 @@ function inferredH3AssetFamily(name, descriptor = null) {
 }
 function selectedH3AssetCompatibility(node, mode) {
   const issues = [];
-  const expected = modeFamily(mode);
+  const expected = modeFamily(mode, node);
   const acceleration = String(widget(node, "acceleration")?.value || "native").toLowerCase();
   const turboMode = String(widget(node, "turbo_mode")?.value || "off").toLowerCase();
   const entries = [];
@@ -1110,7 +1158,7 @@ function selectedH3AssetCompatibility(node, mode) {
     const convrot = fused.toLowerCase().includes("convrot");
     const supported = convrot ? ["t2va", "i2va", "fl2va", "ref2va"] : ["t2va"];
     if (!fused) issues.push(["error", "Fused Fast is active but no diffusion checkpoint is selected."]);
-    else if (!supported.includes(String(mode).toLowerCase())) issues.push(["error", `${fused} is not compatible with ${String(mode).toUpperCase()}. This fused profile supports ${supported.join(", ").toUpperCase()} only.`]);
+    else if (!supported.includes(nativeMode(mode, node))) issues.push(["error", `${fused} is not compatible with ${String(mode).toUpperCase()}. This fused profile supports ${supported.join(", ").toUpperCase()} only.`]);
     if (Boolean(widget(node, "secondary_lora_enabled")?.value)) issues.push(["error", "Fused Fast is a complete checkpoint profile and cannot be combined with Secondary creative LoRA."]);
   }
   return issues;
@@ -1122,11 +1170,11 @@ function fastH3Asset(node, mode = shotboardMode(node)) {
     const verified = widget(node, "turbo_lora_name")?.options?.iamccs_fasth3_values;
     const family = inferredH3AssetFamily(name, asset);
     return (verified ? verified.includes(name) : asset?.role === "fasth3" && asset.native && !asset.error && !asset.conflict)
-      && (!family || family === modeFamily(mode));
+      && (!family || family === modeFamily(mode, node));
   }) || "";
 }
-function turboModeGroup(mode) {
-  if (modeFamily(mode) === "ref2") return "ref2";
+function turboModeGroup(mode, node) {
+  if (modeFamily(mode, node) === "ref2") return "ref2";
   return String(mode).startsWith("t2") || mode === "v2va_controlnet" ? "t2" : String(mode).startsWith("i2") ? "i2" : "fl2";
 }
 function isPddLoRA(name, family) {
@@ -1152,7 +1200,7 @@ function assistantTurboAssets(node, family) {
     && options.iamccs_h3_recipes[asset.recipe].values.acceleration !== "h3_sla");
 }
 function applyAssistantTurbo(node, name) {
-  const asset = assistantTurboAssets(node, modeFamily(shotboardMode(node))).find(item => item.name === name);
+  const asset = assistantTurboAssets(node, modeFamily(shotboardMode(node), node)).find(item => item.name === name);
   if (!asset) return false;
   setValue(node, "h3_omni_enabled", false, false);
   const values = widget(node, "turbo_lora_name").options.iamccs_h3_recipes[asset.recipe].values;
@@ -1288,6 +1336,7 @@ function selectedDelivery(node) {
   if (!widget(node, "upscale_enabled")?.value) return "native-delivery";
   const mode = String(widget(node, "upscale_mode")?.value || "off");
   if (!deliveryBranchGate(node, mode).available) return "native-delivery";
+  if (mode === "h3_fast_latent_2pass" && plateProfile(node) !== "off") return "plate-refine";
   return ({
     h3_ultimate_tiled: "ultimate-tiled",
     h3_fast_latent_2pass: "upres",
@@ -1336,8 +1385,9 @@ function deliveryModeAvailable(node, mode) {
 }
 
 function applyRecipe(node, recipe) {
-  const mode = shotboardMode(node), family = modeFamily(mode), set = (name, value) => setValue(node, name, value, false);
+  const mode = shotboardMode(node), family = modeFamily(mode, node), set = (name, value) => setValue(node, name, value, false);
   if (["native-delivery", "ultimate-tiled", "upres", "h3-pixel", "pixel-safe", "ltx-master", "ltx-per-shot", "rtx-final"].includes(recipe)) set("h3_open_refine_enabled", false);
+  if (["native-delivery", "open-h3-refine", "ultimate-tiled", "upres", "h3-pixel", "pixel-safe", "ltx-master", "ltx-per-shot", "rtx-final"].includes(recipe)) set("h3_plate_refine_profile", "off");
   if (["native", "pdd", "fasth3", "pika", "sla", "fused"].includes(recipe)) set("h3_omni_enabled", false);
   if (recipe === "open-h3-refine") {
     if (!branchGate(node, "h3_open_refine_enabled").available) return false;
@@ -1400,7 +1450,7 @@ function applyRecipe(node, recipe) {
     const asset = current || firstChoice(node, "fused_turbo_model_name", (name) => (name.includes("fused") || name.includes("turbo")) && !name.includes("ref2"));
     if (!asset) { alert("Fused Fast is unavailable: no compatible fused diffusion model is installed."); return false; }
     const convrot = asset.toLowerCase().includes("convrot");
-    if (!(convrot ? ["t2va", "i2va", "fl2va", "ref2va"] : ["t2va"]).includes(shotboardMode(node))) { alert("This fused checkpoint does not support the selected mode."); return false; }
+    if (!(convrot ? ["t2va", "i2va", "fl2va", "ref2va"] : ["t2va"]).includes(nativeMode(shotboardMode(node), node))) { alert("This fused checkpoint does not support the selected mode."); return false; }
     rememberAttentionChoice(node); set("h3_veda_enabled", false);
     resetAcceleration(set); set("fused_turbo_model_name", asset); set("acceleration", "matlowai_fused_turbo_manual_sigma");
     set("fused_turbo_sigma_preset", "4_step"); set("steps", 4); set("sampler_name", "res_multistep"); set("scheduler", "simple");
@@ -1452,6 +1502,19 @@ function applyRecipe(node, recipe) {
       h3_upres_tile_width:portrait?480:864,h3_upres_tile_height:portrait?864:480,h3_upres_overlap_width:128,h3_upres_overlap_height:128,
       h3_upres_fade_width:32,h3_upres_fade_height:32,h3_upres_min_tile_size:256,h3_upres_overlap_mode:"earlier",h3_upres_overlap_blend:"linear",h3_upres_pixel_groups:2})) set(key,value);
     for (const axis of ["width","height"]) if (!(Number(widget(node,`upscale_${axis}`)?.value) > Number(widget(node,axis)?.value))) set(`upscale_${axis}`, Math.ceil(Number(widget(node,axis)?.value || 512)*2/32)*32);
+  } else if (recipe === "plate-refine") {
+    if (!plateRefineAvailable(node)) return false;
+    const current = String(widget(node, "h3_upres_model_name")?.value || "");
+    const installed = current && !/^none$/i.test(current) ? current : firstChoice(node,"h3_upres_model_name",name => /minimax_h3.*upscaler/i.test(name));
+    if (!installed) { alert("Select an installed H3 3D latent upscaler in Output first."); return false; }
+    set("h3_upres_model_name", installed);
+    set("h3_open_refine_enabled", false);
+    set("upscale_enabled", true); set("upscale_mode", "h3_fast_latent_2pass");
+    set("h3_upres_rtx_enabled", false);
+    node.properties ||= {};
+    node.properties.iamccs_delivery_route = "h3_plate_refine";
+    if (plateProfile(node) === "off") set("h3_plate_refine_profile", "up_to_12gb");
+    normalizeDeliveryResolution(node, "h3_fast_latent_2pass");
   } else if (recipe === "upres") {
     node.properties ||= {}; node.properties.iamccs_native_two_pass_mode = "h3_fast_latent_2pass";
     set("upscale_enabled", true); set("upscale_mode", "h3_fast_latent_2pass");
@@ -1610,17 +1673,17 @@ function applyMemoryProfileChoice(node, value) {
 
 function accelerationAvailable(node, recipe, mode = shotboardMode(node)) {
   if (recipe === "pika") {
-    if (!["t2va", "i2va", "fl2va", "ref2va", "v2va_face_swap_lora", "ref2va_vfx_edit", "ref2vid_lipsync", "auto_from_timeline"].includes(String(mode))) return false;
-    const key = `pika_flex_${modeFamily(mode) === "ref2" ? "ref2va" : "fl2va"}_lora`;
+    if (!["t2va", "i2va", "fl2va", "fl2va_extended_av", "t2va_continuous", "ref2va", "v2va_face_swap_lora", "ref2va_vfx_edit", "ref2vid_lipsync", "auto_from_timeline"].includes(String(mode))) return false;
+    const key = `pika_flex_${modeFamily(mode, node) === "ref2" ? "ref2va" : "fl2va"}_lora`;
     return Boolean(String(widget(node,key)?.value || "") || firstChoice(node,key,name => name.includes("pika")));
   }
-  const family = modeFamily(mode);
+  const family = modeFamily(mode, node);
   if (recipe === "pdd") return Boolean(firstChoice(node, "pdd_lora_name", (name) => isPddLoRA(name, family)));
   if (recipe === "fasth3") return Boolean(fastH3Asset(node, mode));
   if (recipe === "sla") return widget(node, "turbo_lora_name")?.options?.iamccs_sla_available !== false && Boolean(firstChoice(node, "turbo_lora_name", (name) => name.includes("sla") && name.includes(family)));
   if (recipe === "fused") {
     const name = String(widget(node, "fused_turbo_model_name")?.value || "") || firstChoice(node, "fused_turbo_model_name", (name) => name.includes("fused") || name.includes("turbo"));
-    return Boolean(name) && (String(name).toLowerCase().includes("convrot") ? ["t2va", "i2va", "fl2va", "ref2va"] : ["t2va"]).includes(String(mode));
+    return Boolean(name) && (String(name).toLowerCase().includes("convrot") ? ["t2va", "i2va", "fl2va", "ref2va"] : ["t2va"]).includes(nativeMode(mode, node));
   }
   return true;
 }
@@ -1700,6 +1763,11 @@ function mount(node) {
   .iamccs-h3pro .h3p-section-note{color:#AEBBBC}
   .iamccs-h3pro .h3p-functional{border-radius:3px;background:#152C38;border-color:#477C9C}
   .iamccs-h3pro .h3p-functional-title{color:#EAC77F}
+  .iamccs-h3pro .h3p-final-finish{border-color:#aa86c2;background:#2a1d36;margin-bottom:8px}
+  .iamccs-h3pro .h3p-final-finish > .h3p-functional-title{color:#e8c9ff}
+  .iamccs-h3pro .h3p-final-finish .h3p-finish-group{border:1px solid #654874;border-radius:4px;padding:8px;margin-top:7px;background:#21192c}
+  .iamccs-h3pro .h3p-final-finish .h3p-finish-group-title{color:#e8c9ff;margin:0 0 6px;font-weight:800}
+  .iamccs-h3pro .h3p-final-finish p{margin:6px 0;color:#d4c5e0}
   .iamccs-h3pro .h3p-field{border-radius:3px;background:#172326;border-color:#46595D}
   .iamccs-h3pro .h3p-field label{color:#C5D3CF}
   .iamccs-h3pro .h3p-field small{color:#9BAEAE}
@@ -1721,6 +1789,13 @@ function mount(node) {
   .iamccs-h3pro .h3p-memory-recipes,.iamccs-h3pro .h3p-guide-window-recipes,.iamccs-h3pro .h3p-attention-recipes{border-radius:3px;border-color:#477C9C;background:#152C38}
   .iamccs-h3pro .h3p-speed-recipes,.iamccs-h3pro .h3p-turbo-recipes{border-radius:3px;border-color:#795B9C;background:#241E30}
   .iamccs-h3pro .h3p-delivery-recipes,.iamccs-h3pro .h3p-face-refine-preset-group{border-radius:3px;border-color:#4E8C70;background:#17352D}
+  .iamccs-h3pro .h3p-mode-family{grid-column:1/-1;border:1px solid #426475;border-radius:4px;padding:10px;background:#18262D}
+  .iamccs-h3pro .h3p-mode-family.active{border-color:var(--mode-accent)}
+  .iamccs-h3pro .h3p-mode-family h3{margin:0 0 8px;color:var(--mode-accent);font-size:12px;letter-spacing:1px}
+  .iamccs-h3pro .h3p-mode-family .h3p-choice.active:not(:disabled){border-color:var(--mode-accent);background:var(--mode-selected);color:#F4F8F6;box-shadow:inset 3px 0 var(--mode-accent)}
+  .iamccs-h3pro .h3p-mode-family .h3p-choice.active:not(:disabled) span{color:#D4DFDE}
+  .iamccs-h3pro .h3p-delivery-recipes .h3p-recipe.active:not(:disabled){border-color:#79BE9A;background:#254D3F;color:#E2F9EB;outline-color:#79BE9A}
+  .iamccs-h3pro .h3p-final-finish .h3p-recipe.active:not(:disabled),.iamccs-h3pro .h3p-final-finish .h3p-finish-group.active{border-color:#C39DDF;background:#453056;color:#F3E3FF;outline-color:#C39DDF}
   .iamccs-h3pro .h3p-face-refine-group-note,.iamccs-h3pro .h3p-face-refine-help{color:#AFC1C1}
   .iamccs-h3pro .h3p-asset,.iamccs-h3pro .h3p-asset-actions button{border-radius:3px}
   /* End original Settings palette. */
@@ -1869,6 +1944,7 @@ function mount(node) {
   const assistantMain = q(".h3p-main");
   assistantMain?.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   function fieldRelevant(name, mode) {
+    if (name.startsWith("h3_move_")) return false; // Archived MOVE widgets stay hidden.
     if (["ltx_looper_guiding_strength", "ltx_looper_overlap_strength", "ltx_looper_cond_image_strength"].includes(name)) return false;
     const value = String(mode).toLowerCase();
     const endpoint = String(widget(node, "longvid_terminal_endpoint_mode")?.value || "hard_image").toLowerCase();
@@ -1883,8 +1959,9 @@ function mount(node) {
     if (name === "keyframe_joint_latent_new" && value !== "keyframe_joint_native") return false;
     if (["upscale_link_to_native", "upscale_link_factor"].includes(name) && (value !== "longvid_guides" || hd || !Boolean(widget(node, "longvid_pianosequenza_2stage_enabled")?.value))) return false;
     if (name.startsWith("v2v_") && !value.startsWith("v2va_")) return false;
-    if (name.startsWith("extended_av_") && value !== "fl2va_extended_av" && !(value === "longvid_keyframe_continuous" && String(widget(node,"longvid_continuous_engine")?.value || "") === "extended_av_continuous")) return false;
+    if (name.startsWith("extended_av_") && !["fl2va_extended_av", "t2va_continuous"].includes(value) && !(value === "longvid_keyframe_continuous" && String(widget(node,"longvid_continuous_engine")?.value || "") === "extended_av_continuous")) return false;
     if (name === "flf_continuity_tail_frames" && value === "longvid_keyframe_continuous" && String(widget(node,"longvid_continuous_engine")?.value || "") === "extended_av_continuous") return false;
+    if (name === "extended_av_custom_window_frames" && String(widget(node, "extended_av_window_policy")?.value || "max_native") === "max_native") return false;
     if (["extended_av_custom_window_frames", "extended_av_custom_overlap_frames"].includes(name) && String(widget(node, "extended_av_profile")?.value || "safe_8_12gb") !== "custom") return false;
     if (name.startsWith("h3_auto_extend_") && value === "fl2va_extended_av") return false;
     const continuityFamily = value.includes("fl2") || value.includes("longvid") || value.includes("guided_av_loop") || value === "keyframe_joint_native" || value === "latent_go_ahead" || value === "pianosequenza_true_long";
@@ -1908,17 +1985,34 @@ function mount(node) {
     if (!group.dynamic) return group.fields.filter((name) => widget(node, name) && fieldRelevant(name, mode));
     return (node.widgets || []).map((item) => item?.name).filter((name) => name && !ASSIGNED.has(name) && !SHOTBOARD_OWNED.has(name) && !INTERNAL.has(name) && !COMPATIBILITY_ONLY.has(name) && fieldRelevant(name, mode));
   }
+  function setFinalFinishEnabled(name, enabled) {
+    if (enabled && name === "h3_final_relay_enabled") setValue(node, "h3_final_reca_enabled", false, false);
+    if (enabled && name === "h3_final_reca_enabled") setValue(node, "h3_final_relay_enabled", false, false);
+    setValue(node, name, enabled);
+  }
   function makeControl(name) {
     const item = widget(node, name); if (!item || (name.startsWith("h3_guard_") && COMPATIBILITY_ONLY.has(name))) return null;
     const box = document.createElement("div"); box.className = "h3p-field";
     if (name === "secondary_lora_continuation_only") box.style.gridColumn = "1 / -1";
-    const label = document.createElement("label"); label.textContent = name === "secondary_lora_continuation_only" ? "Second LoRA: from segment 2" : human(name); box.append(label);
+    const finalFinishLabels = {
+      h3_final_relay_enabled: "Enable RelayVSR", h3_final_relay_scale: "RelayVSR Scale", h3_final_relay_detail: "RelayVSR Detail",
+      h3_final_dlss_enabled: "DLSS5 · 1×", h3_final_dlss_style: "DLSS5 Style",
+      h3_final_dlss_intensity: "DLSS5 Intensity", h3_final_dlss_tone: "DLSS5 Local Tone",
+      h3_final_dlss_structure: "DLSS5 Local Structure", h3_final_dlss_skin: "DLSS5 Skin Structure",
+      h3_final_dlss_skin_mask: "DLSS5 Automatic Skin Mask",
+      h3_final_reca_enabled: "Enable ReCaVSR", h3_final_reca_scale: "ReCaVSR Scale",
+      h3_final_reca_color_fix: "ReCaVSR Colour Match", h3_final_reca_kv_offload: "ReCaVSR Attention Cache in RAM",
+      h3_vsr_per_segment: "VSR as Second Pass per Segment",
+    };
+    const label = document.createElement("label"); label.textContent = finalFinishLabels[name] ?? (name === "h3_fast_latent_stage2_native_windows" ? "Native Stage-2 Windows · Experimental" : name === "secondary_lora_continuation_only" ? "Second LoRA: from segment 2" : human(name)); box.append(label);
     let control; const options = name === "h3_guard_mode" ? ["off", "monitor"] : choices(item);
     if (options.length) {
       control = document.createElement("select"); options.forEach((value) => control.add(new Option(
         name === "h3_fast_latent_stage2_guides"
           ? (String(value) === "masked" ? "MASKED · pin image guide tokens" : "SOFT · guide conditioning")
-          : friendly(value), String(value)))); control.value = String(item.value ?? "");
+          : name === "h3_video_decoder"
+            ? (String(value) === "sol" ? "SOL VAE · auto load" : "NATIVE VAE · connected original")
+            : name === "h3_final_relay_scale" ? `×${value}` : friendly(value), String(value)))); control.value = String(item.value ?? "");
     } else if (typeof item.value === "boolean") {
       control = document.createElement("input"); control.type = "checkbox"; control.checked = Boolean(item.value);
     } else {
@@ -1966,6 +2060,7 @@ function mount(node) {
         if (value) applyRecipe(node, "open-h3-refine");
         else setValue(node, name, false, false);
       }
+      else if (["h3_final_relay_enabled", "h3_final_reca_enabled"].includes(name)) setFinalFinishEnabled(name, value);
       else if (name === "upscale_enabled") selectDeliveryMode(node,value ? (String(widget(node,"upscale_mode")?.value || "off") !== "off" ? widget(node,"upscale_mode").value : node.properties?.iamccs_delivery_route || "h3_ultimate_tiled") : "off");
       else if (name === "upscale_mode") selectDeliveryMode(node,String(value));
       else if (["upscale_width","upscale_height"].includes(name)) {
@@ -1988,7 +2083,9 @@ function mount(node) {
       if (name === "turbo_mode" || name === "turbo_lora_name") applyDeclaredTurboContract(node);
       refresh();
     }; box.append(control);
-    const guidance = name === "h3_controlnet_preprocess_resolution"
+    const guidance = name === "h3_fast_latent_stage2_native_windows"
+      ? "OFF: IAMCCS CPU-safe accumulation. ON: ComfyUI native windows with device accumulation and an adaptive memory budget. Experimental: more VRAM, no guaranteed speedup or OOM prevention. Window and overlap controls are in Output."
+      : name === "h3_controlnet_preprocess_resolution"
       ? "Choose 768 to match the working DWPose example. NODE DEFAULT keeps the Cine H3 Fun Control Input resolution (512 in existing smoke workflows). This setting applies only when preprocessing source_video; an already-preprocessed control_video bypasses it."
       : name === "h3_controlnet_dwpose_torch_gpu"
       ? "ON: use installed TorchScript YOLOX + DWPose on CUDA when this workflow preprocesses source_video through Cine H3 Fun Control Input. OFF: preserve the existing automatic preprocessor route. Preprocessed control_video bypasses this toggle."
@@ -2168,19 +2265,66 @@ function mount(node) {
     };
     parent.append(button);
   }
+  function renderPlateControls(parent) {
+    const section = document.createElement("section");
+    section.className = "h3p-functional";
+    const title = document.createElement("div");
+    title.className = "h3p-functional-title";
+    title.textContent = "H3 PLATE REFINE · OUTPUT VRAM";
+    section.append(title);
+    const presets = document.createElement("div");
+    presets.className = "h3p-recipes h3p-delivery-recipes";
+    for (const [id,label] of [["off", "OFF · STANDARD H3 2-PASS"], ...H3_PLATE_PROFILES]) addRecipe(presets,label,`plate:${id}`,true,plateProfile(node) === id,() => {
+      setValue(node, "h3_plate_refine_profile", id);
+      node.properties ||= {};
+      node.properties.iamccs_delivery_route = id === "off" ? "h3_fast_latent_2pass" : "h3_plate_refine";
+      document.dispatchEvent(new CustomEvent("iamccs:h3-settings-changed", {
+        detail: { source_node_id: node.id, recipe: "plate_refine_profile" },
+      }));
+      refresh(true);
+    });
+    section.append(presets);
+    const sigmas = makeControl("h3_plate_refine_sigmas");
+    if (sigmas) section.append(sigmas);
+    const note = document.createElement("small");
+    note.textContent = "VRAM presets size the refine windows and tiles. The LOW → HIGH canvas pair, FPS and native audio are retained.";
+    section.append(note);
+    parent.append(section);
+  }
   function renderAssistant(mode) {
     const grid = q("[data-grid]"); grid.className = "h3p-flow"; grid.replaceChildren();
     const ask = (text) => { const el = document.createElement("div"); el.className = "h3p-question"; el.textContent = text; grid.append(el); };
     ask("1 · WHAT DO YOU WANT TO CREATE?"); const modes = document.createElement("div"); modes.className = "h3p-choice-grid";
     const selectedMode = assistantModeKey(node, mode);
     const family=value=>value==='reference_image'?'REFERENCES / IDENTITY':['fl2va_extended_av','t2va_continuous'].includes(value)?'EXTENSION / LONG TAKE':value.startsWith('t2')?'TEXT / CREATE':value.startsWith('ref2')?'REFERENCES / IDENTITY':value.startsWith('v2')?'VIDEO / TRANSFORM':['i2va','fl2va_stable','fl2va_continuous'].includes(value)?'IMAGES / SHOTS':'TIMELINE / LONG FORM';
-    for(const category of ['TEXT / CREATE','IMAGES / SHOTS','EXTENSION / LONG TAKE','REFERENCES / IDENTITY','VIDEO / TRANSFORM','TIMELINE / LONG FORM']){
-      const box=document.createElement('section');box.style.cssText='grid-column:1/-1;border:1px solid #426475;border-radius:10px;padding:12px;background:linear-gradient(135deg,#142632,#18202d)';
-      const heading=document.createElement('h3');heading.textContent=category;heading.style.cssText='margin:0 0 10px;color:#9bdccc;font-size:12px;letter-spacing:1px';box.append(heading);
+    const families = [
+      ["TEXT / CREATE", "#E3BC77", "#503921"],
+      ["IMAGES / SHOTS", "#8CC4E7", "#233D51"],
+      ["EXTENSION / LONG TAKE", "#8FCEB0", "#234638"],
+      ["REFERENCES / IDENTITY", "#C39DDF", "#453056"],
+      ["VIDEO / TRANSFORM", "#E7A797", "#50332D"],
+      ["TIMELINE / LONG FORM", "#9BDCCC", "#204640"],
+    ];
+    for (const [category, accent, selectedBackground] of families) {
+      const box = document.createElement("section");
+      box.className = "h3p-mode-family";
+      box.style.setProperty("--mode-accent", accent);
+      box.style.setProperty("--mode-selected", selectedBackground);
+      const heading = document.createElement("h3"); heading.textContent = category; box.append(heading);
       const cards=document.createElement('div');cards.className='h3p-choice-grid';
       MODE_CHOICES.filter(([,value])=>!HIDDEN_MODES.has(value)&&!UNLISTED_MODES.has(value)&&family(value)===category).forEach(([label,value,note])=>{
         const row=document.createElement('div'); row.className='h3p-mode-engine-row'; row.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:stretch;min-width:0';
-        const button=document.createElement('button'); const availability=modeAvailability(node,value); button.className=`h3p-choice${selectedMode===value?' active':''}`; button.innerHTML=`${label}<span>${note}${availability.available?'':` · ${availability.reason}`}</span>`; button.disabled=!availability.available; button.title=availability.reason||note; button.onclick=()=>{if(availability.available)setAssistantMode(node,value);}; row.append(button);
+        const button = document.createElement("button");
+        const availability = modeAvailability(node, value);
+        const selected = selectedMode === value;
+        button.className = `h3p-choice${selected ? " active" : ""}`;
+        button.setAttribute("aria-pressed", String(selected));
+        button.innerHTML = `${label}<span>${note}${availability.available ? "" : ` · ${availability.reason}`}</span>`;
+        button.disabled = !availability.available;
+        button.title = availability.reason || note;
+        button.onclick = () => { if (availability.available) setAssistantMode(node, value); };
+        if (selected) box.classList.add("active");
+        row.append(button);
         const targetEngine=MODE_ENGINE_GROUP[value];
         if(targetEngine){
           const engine=document.createElement('button'); engine.type='button'; engine.className='h3p-recipe h3p-mode-engine-toggle'; engine.textContent='ENGINE ▸'; engine.title='Select this mode and open its dedicated Settings PRO engine panel'; engine.disabled=!availability.available; engine.style.cssText='min-width:76px;padding:8px 9px;font-size:9px;letter-spacing:.7px';
@@ -2232,9 +2376,9 @@ function mount(node) {
       const section = document.createElement("section"); section.className = "h3p-functional"; section.style.cssText = "grid-column:auto;min-width:0;margin:0;padding:8px";
       const title = document.createElement("div"); title.className = "h3p-functional-title"; title.textContent = `${label} · ${family === "ref2" ? "REF2VA" : "FL2VA"} WEIGHTS`; section.append(title);
       const row = document.createElement("div"); row.className = "h3p-recipes h3p-turbo-recipes";
-      const assets = assistantTurboAssets(node, family), compatible = modeFamily(mode) === family;
+      const assets = assistantTurboAssets(node, family), compatible = modeFamily(mode, node) === family;
       for (const asset of assets) {
-        const selected = compatible && category === turboModeGroup(mode) && selectedSpeed === "turbo" && widget(node,"turbo_lora_name")?.value === asset.name;
+        const selected = compatible && category === turboModeGroup(mode, node) && selectedSpeed === "turbo" && widget(node,"turbo_lora_name")?.value === asset.name;
         const version = asset.name.match(/_v(\d+(?:\.\d+)?)/i)?.[1];
         const shortLabel = `${declaredTurboSteps(node,asset.name)} STEP${/768/.test(asset.name + asset.recipe) ? " · 768P" : ""}${version ? ` · v${version}` : ""}`;
         addRecipe(row, shortLabel, `turbo:${asset.name}`, compatible, selected, () => applyAssistantTurbo(node,asset.name));
@@ -2271,6 +2415,7 @@ function mount(node) {
     addRecipe(delivery, "OPEN-H3 REFINEMENT · 3 STEP", "open-h3-refine", branchGate(node, "h3_open_refine_enabled").available, selectedFinish === "open-h3-refine");
     addRecipe(delivery, "H3 DETAIL · 1-STEP REFINE", "ultimate-tiled", deliveryModeAvailable(node, "h3_ultimate_tiled"), selectedFinish === "ultimate-tiled");
     addRecipe(delivery, "H3 2-PASS UPRES", "upres", branchGate(node, "h3_upres_model_name").available && deliveryModeAvailable(node, "h3_fast_latent_2pass"), selectedFinish === "upres");
+    if (widget(node, "h3_plate_refine_profile")) addRecipe(delivery, "H3 PLATE REFINE · 2ND PASS", "plate-refine", plateRefineAvailable(node), selectedFinish === "plate-refine");
     addRecipe(delivery, "PIXEL SAFE · LOW VRAM", "pixel-safe", deliveryModeAvailable(node, "pixel_tiled_low_vram"), selectedFinish === "pixel-safe");
     addRecipe(delivery, "H3 PIXEL REFINE", "h3-pixel", deliveryModeAvailable(node, "h3_pixel_refine"), selectedFinish === "h3-pixel");
     addRecipe(delivery, "LTX 2.3 MASTER", "ltx-master", deliveryModeAvailable(node, "ltx23"), selectedFinish === "ltx-master");
@@ -2281,6 +2426,65 @@ function mount(node) {
     detailNote.textContent = mode === "v2va_face_swap" ? "SAM3 crop swap supports Native / RTX delivery. H3 Detail needs a full-frame latent and is unavailable for this legacy crop mode." : "H3 DETAIL uses the proven SwapChar second-pass recipe for full-frame video modes: learned latent upscale, 1 step, SA Solver / simple, denoise 0.2, seed 777. Output exposes the shared seed, dimensions, model, sampling and tile controls. The native pass keeps its own settings.";
     if (selectedFinish === "open-h3-refine") detailNote.textContent = "One native generation followed by Open-H3 refinement. Dedicated controls are in Output / Open-H3 Refinement. The source soundtrack is retained. Gentle sigma 0.8 still requires visual review of identity and acting; the high-resolution transformer pass is not tiled.";
     grid.append(detailNote);
+    renderFinalFinish(grid, true);
+    renderSegmentStorage(grid);
+  }
+
+  function renderFinalFinish(grid, choicesOnly = false) {
+    if (!FINAL_FINISH_FIELDS.some(name => widget(node, name))) return;
+    const finish = document.createElement("section");
+    finish.className = "h3p-functional h3p-final-finish";
+    const title = document.createElement("div");
+    title.className = "h3p-functional-title";
+    title.textContent = "FINAL FINISH · AFTER UPSCALE AND JOINS";
+    finish.append(title);
+    const note = document.createElement("p");
+    if (choicesOnly) {
+      const choices = document.createElement("div");
+      choices.className = "h3p-recipes";
+      for (const [label, [field]] of FINAL_FINISH_GROUPS) {
+        const item = widget(node, field);
+        if (!item) continue;
+        const selected = item.value === true;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `h3p-recipe${selected ? " active" : ""}`;
+        button.textContent = label;
+        button.setAttribute("aria-pressed", String(selected));
+        button.onclick = () => { setFinalFinishEnabled(field, !selected); refresh(); };
+        choices.append(button);
+      }
+      note.textContent = "Adjust scale and processing in Output.";
+      finish.append(choices, note);
+      grid.append(finish);
+      return;
+    }
+    note.textContent = "Choose RelayVSR or ReCaVSR for the joined master. DLSS5 can run on its own or after either VSR at the same size.";
+    finish.append(note);
+    const segmented = makeControl("h3_vsr_per_segment");
+    if (segmented) {
+      const hint = document.createElement("p");
+      hint.textContent = "Native delivery: upscale each segment before the next. Editor delivery, other upscale routes and overlap joins apply VSR to the joined master.";
+      segmented.append(hint);
+      finish.append(segmented);
+    }
+    for (const [label, names] of FINAL_FINISH_GROUPS) {
+      const fields = document.createElement("div");
+      fields.className = "h3p-functional-grid";
+      for (const field of names) {
+        const control = makeControl(field);
+        if (control) fields.append(control);
+      }
+      if (!fields.childElementCount) continue;
+      const group = document.createElement("div");
+      group.className = `h3p-finish-group${widget(node, names[0])?.value === true ? " active" : ""}`;
+      const heading = document.createElement("div");
+      heading.className = "h3p-finish-group-title";
+      heading.textContent = label;
+      group.append(heading, fields);
+      finish.append(group);
+    }
+    grid.append(finish);
   }
   async function renderAssetLibrary(kind, grid) {
     grid.replaceChildren();
@@ -2354,6 +2558,40 @@ function mount(node) {
       }
     } catch (error) { status.textContent = `Library unavailable: ${error.message}`; }
     finally { preserveEditorAfterRefresh(); }
+  }
+  function renderSegmentStorage(grid) {
+    const section = document.createElement("section"); section.className = "h3p-functional";
+    section.style.gridColumn = "1 / -1";
+    const title = document.createElement("div"); title.className = "h3p-functional-title"; title.textContent = "R49 OUTPUT STORAGE";
+    const status = document.createElement("small");
+    status.textContent = "Finished films and workflow metadata are saved in Films.";
+    const purge = document.createElement("button"); purge.type = "button"; purge.className = "h3p-danger";
+    purge.textContent = "PURGE R49 SEGMENTS";
+    purge.onclick = async () => {
+      purge.disabled = true;
+      try {
+        const check = await fetch("/api/iamccs/h3/r49-segments", { cache: "no-store" });
+        const inventory = await check.json();
+        if (!check.ok) throw new Error(inventory.error || `HTTP ${check.status}`);
+        const size = (bytes) => `${(bytes / 1e9).toFixed(2)} GB`;
+        const protectedText = (inventory.protected_masters ? ` ${inventory.protected_masters} unpublished master(s) protected.` : "")
+          + (inventory.protected_lineage ? ` ${inventory.protected_lineage} source clip(s) still needed by saved continuations.` : "");
+        if (!inventory.files) { status.textContent = "No R49 segments to purge." + protectedText; return; }
+        if (!window.confirm(`Permanently delete ${inventory.files} R49 intermediate files (${size(inventory.bytes)})? Finished films and their metadata stay in Films. Segments cannot be resumed after deletion.`)) return;
+        const response = await fetch("/api/iamccs/h3/r49-segments/purge", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: inventory.token }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        status.textContent = `Deleted ${result.deleted} files (${size(result.bytes)}).${result.skipped.length ? ` Skipped ${result.skipped.length}.` : ""}` + protectedText;
+      } catch (error) { status.textContent = `Segment purge failed: ${error.message}`; }
+      finally { purge.disabled = false; }
+    };
+    const actions = document.createElement("div"); actions.className = "h3p-asset-actions";
+    actions.append(purge, status);
+    section.append(title, actions);
+    grid.append(section);
   }
   async function renderCacheLibrary(grid) {
     grid.replaceChildren();
@@ -2623,7 +2861,14 @@ function mount(node) {
       help.textContent = "Choose ONE speed recipe. Native: quality baseline; PDD: 8-step distillation; FastH3: 6 steps; SLA: 4-step sparse-attention recipe; Fused ConvRot: baked 4-step model, no extra Turbo/PDD LoRA. Memory presets only change memory, not speed. Manual overrides are optional below.";
       recipes.append(help);
     }
-    if (active === "extension" && String(mode) === "fl2va_extended_av") {
+    if (active === "extension" && ["fl2va_extended_av", "t2va_continuous"].includes(String(mode))) {
+      const policy = String(widget(node, "extended_av_window_policy")?.value || "max_native");
+      const lengthBar = document.createElement("div"); lengthBar.className = "h3p-recipes";
+      [["MAX NATIVE · FEWER JOINS", "max_native"], ["PROFILE WINDOW · LOWER MEMORY", "profile"]].forEach(([label,id]) => addRecipe(lengthBar, label, `ext-window:${id}`, true, policy === id, () => { setValue(node, "extended_av_window_policy", id); refresh(); }));
+      recipes.append(lengthBar);
+      const lengthNote = document.createElement("p");
+      lengthNote.textContent = policy === "max_native" ? "Continuous / Evolving I2V and T2V use full 345-frame AV windows (14.38s sampled). The first run delivers up to 311 frames (12.96s); later runs subtract their pinned context too. Only the final remainder is shorter. Context stays controlled by the profile below; its low-memory window applies only in PROFILE WINDOW mode. Timed Evolving beats keep their authored positions. More RAM/VRAM may be required." : "The profile below controls both technical window length and pinned context. SAFE keeps shorter windows to reduce memory. This does not change the authored duration or Evolving beat times.";
+      recipes.append(lengthNote);
       const current = String(widget(node, "extended_av_profile")?.value || "safe_8_12gb");
       const profileBar = document.createElement("div"); profileBar.className = "h3p-recipes h3p-memory-recipes";
       [["SAFE · 8–12 GB", "safe_8_12gb"], ["BALANCED · 12–16 GB", "balanced_12_16gb"], ["QUALITY · 20–24 GB", "quality_20_24gb"], ["MAX · 32 GB+", "max_32gb_plus"], ["CUSTOM", "custom"]].forEach(([label,id]) => addRecipe(profileBar, label, `ext:${id}`, true, current === id, () => { setValue(node, "extended_av_profile", id); refresh(); }));
@@ -2640,9 +2885,6 @@ function mount(node) {
       });
       addRecipe(recipes, "CUSTOM AUDIO · PERFORMANCE / LIP-SYNC", "multishot_custom_audio", true, false, () => { setShotboardAudio(node, "h3_custom_audio_drive"); refresh(); });
       addRecipe(recipes, "H3 NATIVE AUDIO", "multishot_native_audio", true, false, () => { setShotboardAudio(node, "h3_native_generated"); refresh(); });
-    }
-    if (active === "engine_ref2va") {
-      addRecipe(recipes, "FASTH3 OMNI · 8 STEP", "omni", true, Boolean(widget(node,"h3_omni_enabled")?.value), () => { setAssistantMode(node,"ref2va_omni"); refresh(); });
     }
     if (["engine_ref2va", "engine_ref2vid"].includes(active)) {
       const note = document.createElement("p");
@@ -2794,8 +3036,10 @@ function mount(node) {
         option.title = option.disabled ? deliveryBranchGate(node,key).reason || "Unavailable in this mode or backend" : label;
         route.add(option);
       }
-      route.value = selectedRoute;
-      route.onchange = () => { if (!selectDeliveryMode(node,route.value)) route.value = selectedRoute; refresh(true); };
+      if (plateRefineAvailable(node)) route.add(new Option("H3 PLATE REFINE · 2ND PASS","h3_plate_refine"));
+      const shownRoute = selectedDelivery(node) === "plate-refine" ? "h3_plate_refine" : selectedRoute;
+      route.value = shownRoute;
+      route.onchange = () => { if (!selectDeliveryMode(node,route.value)) route.value = shownRoute; refresh(true); };
       stageToggle.onchange = () => {
         const remembered = node.properties.iamccs_delivery_route || (String(widget(node,"upscale_mode")?.value) !== "off" ? widget(node,"upscale_mode").value : "h3_ultimate_tiled");
         if (!selectDeliveryMode(node,stageToggle.checked ? remembered : "off")) stageToggle.checked = false;
@@ -2828,9 +3072,7 @@ function mount(node) {
       stagePair.onchange = () => {
         const values = stagePair.value.split(/->|x/).map(Number);
         if (linkedH3 && values.length === 4) {
-          const [lw,lh,hw,hh] = values;
-          for (const [name,value] of Object.entries({width:lw,height:lh,image_width:lw,image_height:lh,upscale_width:hw,upscale_height:hh})) setValue(node,name,value,false);
-          node.properties.iamccs_fast_2pass_pair = stagePair.value;
+          applyLinkedDeliveryPair(node, stagePair.value);
         } else if (!linkedH3 && values.length === 2) {
           setValue(node,"upscale_width",values[0],false); setValue(node,"upscale_height",values[1],false);
         }
@@ -2841,12 +3083,32 @@ function mount(node) {
       const stageNote = document.createElement("small"); stageNote.style.cssText = "flex-basis:100%;color:#91a0ad;font-size:9px";
       stageNote.textContent = selectedRoute === "off" ? "Choose an upscale engine. Grey entries need their connected delivery branch."
         : `${deliveryResolutionGrid(selectedRoute)} px output grid. ${linkedH3 ? "Linked LOW → HIGH updates the native H3 canvas and upscale target." : "Output size changes only delivery; native generation stays at its selected canvas."} Grid compatibility does not guarantee VRAM capacity.`;
-      stage.append(stageLabel,route,stagePair,stageNote); format.after(stage);
+      stage.append(stageLabel, route, stagePair);
+      if (selectedAcceleration(node) === "pika" && selectedDelivery(node) === "upres") {
+        const chip = document.createElement("span");
+        chip.className = "h3p-mark";
+        chip.textContent = "NATIVE · PIKA FLEX 6 STEP → UPSCALE · FAST LATENT";
+        chip.title = "For each rendered segment, Pika samples the native clip. Fast Latent then uses the Stage-2 sampling settings.";
+        stage.append(chip);
+      }
+      stage.append(stageNote);
+      format.after(stage);
     }
     const grid = q("[data-grid]"); grid.className = "h3p-grid"; grid.replaceChildren();
+    if (active === "finish") {
+      renderFinalFinish(grid);
+      renderSegmentStorage(grid);
+    }
+    if (active === "finish" && selectedDelivery(node) === "plate-refine") renderPlateControls(grid);
     if (mode === "v2va_face_swap_lora" && ["swap_lora", "overview"].includes(active)) swapDuration.render(grid);
     let names = fieldNames(group, mode);
-    if (active === "finish") names = [...new Set([...names, ...OPEN_H3_REFINE_FIELDS.filter(name => widget(node, name))])];
+    if (active === "finish") names = [...new Set([...names, ...OPEN_H3_REFINE_FIELDS.filter(name => widget(node, name))])]
+      .filter(name => !FINAL_FINISH_FIELDS.includes(name));
+    if (active === "finish" && selectedDelivery(node) === "plate-refine") {
+      names = names.filter(name => !["h3_fast_latent_stage2_native_windows", "h3_fast_latent_stage2_window",
+        "h3_fast_latent_stage2_overlap", "h3_fast_latent_stage2_guides", "h3_upres_steps",
+        "h3_upres_denoise", "h3_upres_sampler", "h3_upres_scheduler", "h3_upres_rtx_enabled"].includes(name));
+    }
     if (active === "swap_lora" && !names.includes("duration_seconds")) names.unshift("duration_seconds");
     if (active === "overview" && (mode !== "longvid_guides" || String(widget(node,"upscale_mode")?.value) === "h3_fast_latent_2pass")) {
       names = names.filter((name) => !["upscale_link_to_native", "upscale_link_factor"].includes(name));
@@ -2856,7 +3118,20 @@ function mount(node) {
       const multiStageOn = Boolean(widget(node, "longvid_pianosequenza_2stage_enabled")?.value);
       if (!multiStageOn || hd) names = names.filter((name) => name !== "longvid_pianosequenza_stage_profile");
     }
+    if (active === "memory") {
+      for (const [label, value] of [["NATIVE VAE DECODE", "native"], ["SOL VAE DECODE · AUTO LOAD", "sol"]]) {
+        addRecipe(recipes, label, `decoder:${value}`, true, String(widget(node, "h3_video_decoder")?.value || "native") === value, () => { setValue(node, "h3_video_decoder", value); refresh(); });
+      }
+      const note = document.createElement("p");
+      note.textContent = "Sol is an optional native-stage decoder. It automatically loads the registered Sol-H3 VAE and processes the whole segment. Encoding, guides, audio and later refine/upscale VAEs use the connected originals. More activation memory may be needed; Native restores the original decode.";
+      recipes.append(note);
+    }
     if (active === "speed") {
+      const vbvrAvailable = choices(widget(node, "secondary_lora_name")).some(name => /(?:^|[\\/])H3-Licon-VBVR-I2V\.safetensors$/i.test(String(name)));
+      addRecipe(recipes, "VBVR MOTION · FULL · SECOND LORA", "vbvr_full", vbvrAvailable && selectedAcceleration(node) !== "fused" && modeFamily(mode, node) === "fl2", Boolean(widget(node, "secondary_lora_enabled")?.value) && /H3-Licon-VBVR-I2V/i.test(String(widget(node, "secondary_lora_name")?.value || "")), () => { applyVbvrPreset(node); refresh(); });
+      const vbvrNote = document.createElement("p");
+      vbvrNote.textContent = "VBVR is a creative motion/interaction LoRA, independent of the speed recipe. The preset uses strength 1.0 on every segment. Its published target is I2V; T2V and reference-family combinations require separate quality tests. The second-LoRA controls below remain editable.";
+      recipes.append(vbvrNote);
       const toggle = document.createElement("label"), check = document.createElement("input");
       check.type = "checkbox"; check.checked = Boolean(node.properties?.iamccs_speed_manual);
       check.onchange = () => { node.properties ||= {}; node.properties.iamccs_speed_manual = check.checked; refresh(); };
@@ -2894,8 +3169,19 @@ function mount(node) {
   }
   function renderTruth(mode) {
     const assetIssues = selectedH3AssetCompatibility(node, mode);
-    const values = [["Sampling recipe", samplingRecipeLabel(node)], ["Generation authority", node.properties?.iamccs_settings_master ? "SETTINGS PRO" : "SHOTBOARD / INITIAL"], ["Duration authority", node.properties?.iamccs_settings_master ? `SETTINGS PRO · ${widget(node,"duration_seconds")?.value ?? "—"} s · synced to Shotboard` : `SHOTBOARD · ${widget(node,"duration_seconds")?.value ?? "—"} s`], ["Mode", `${mode} · Settings PRO when connected`], ["Editorial authority", "SHOTBOARD · prompts, guides, media, timeline and audio"], ["Asset compatibility", assetIssues.some(([kind]) => kind === "error") ? "INCOMPATIBLE" : assetIssues.length ? "REVIEW" : "COMPATIBLE"], ["VRAM preset", friendly(widget(node, "performance_profile")?.value)], ["Memory contract", `${widget(node,"motion_context_window_frames")?.value ?? "—"} frames · ${widget(node,"h3_exact_chunk_rows")?.value ?? "—"} rows`], ["Guide window", String(mode) === "longvid_guides" ? selectedGuideWindowStrategy(node) : "N/A"], ["Extension engine", String(mode) === "fl2va_extended_av" ? `${friendly(widget(node,"extended_av_profile")?.value)} · MASKED + EXACT · TRIM PINNED HEAD` : "OFF"], ["Sampling / legacy profile", friendly(widget(node, "acceleration")?.value)], ["Speed adapter (Turbo / FastH3 / SLA)", String(widget(node, "turbo_mode")?.value || "off") === "off" && !["fasth3_dense_6step", "h3_sla"].includes(String(widget(node, "acceleration")?.value || "")) ? "OFF" : (widget(node, "turbo_lora_name")?.value || "MISSING")], ["PDD LoRA", widget(node,"pdd_lora_name")?.value || "OFF"], ["Fused model", widget(node, "fused_turbo_model_name")?.value || "OFF"], ["Effective sampling", `${widget(node, "steps")?.value ?? "—"} steps · ${widget(node, "sampler_name")?.value ?? "—"} · ${widget(node, "scheduler")?.value ?? "—"}`], ["Canvas", `${widget(node, "width")?.value ?? "—"} × ${widget(node, "height")?.value ?? "—"}`], ["ControlNet", widget(node, "h3_controlnet_name")?.value || "OFF"], ["Delivery", widget(node, "upscale_enabled")?.value ? widget(node, "upscale_mode")?.value : "NATIVE"], ["Video Editor", Boolean(widget(node,"h3_editor_enabled")?.value) ? "ON · post-master" : "OFF · direct joined master"]];
+    const values = [["Sampling recipe", samplingRecipeLabel(node)], ["Native video decoder", String(widget(node,"h3_video_decoder")?.value || "native") === "sol" ? "SOL · AUTO LOAD · DECODE ONLY" : "CONNECTED H3 VAE"], ["Generation authority", node.properties?.iamccs_settings_master ? "SETTINGS PRO" : "SHOTBOARD / INITIAL"], ["Duration authority", node.properties?.iamccs_settings_master ? `SETTINGS PRO · ${widget(node,"duration_seconds")?.value ?? "—"} s · synced to Shotboard` : `SHOTBOARD · ${widget(node,"duration_seconds")?.value ?? "—"} s`], ["Mode", `${mode} · Settings PRO when connected`], ["Editorial authority", "SHOTBOARD · prompts, guides, media, timeline and audio"], ["Asset compatibility", assetIssues.some(([kind]) => kind === "error") ? "INCOMPATIBLE" : assetIssues.length ? "REVIEW" : "COMPATIBLE"], ["VRAM preset", friendly(widget(node, "performance_profile")?.value)], ["Memory contract", `${widget(node,"motion_context_window_frames")?.value ?? "—"} frames · ${widget(node,"h3_exact_chunk_rows")?.value ?? "—"} rows`], ["Guide window", String(mode) === "longvid_guides" ? selectedGuideWindowStrategy(node) : "N/A"], ["Extension engine", (String(mode) === "fl2va_extended_av" || (String(mode) === "t2va_continuous" && Number(widget(node,"duration_seconds")?.value) > 15)) ? `${String(widget(node,"extended_av_window_policy")?.value || "max_native") === "max_native" ? "MAX NATIVE · 345f technical window" : "PROFILE WINDOW"} · ${friendly(widget(node,"extended_av_profile")?.value)} context · MASKED + EXACT` : "OFF"], ["Sampling / legacy profile", friendly(widget(node, "acceleration")?.value)], ["Speed adapter (Turbo / FastH3 / SLA)", String(widget(node, "turbo_mode")?.value || "off") === "off" && !["fasth3_dense_6step", "h3_sla"].includes(String(widget(node, "acceleration")?.value || "")) ? "OFF" : (widget(node, "turbo_lora_name")?.value || "MISSING")], ["PDD LoRA", widget(node,"pdd_lora_name")?.value || "OFF"], ["Fused model", widget(node, "fused_turbo_model_name")?.value || "OFF"], ["Effective sampling", `${widget(node, "steps")?.value ?? "—"} steps · ${widget(node, "sampler_name")?.value ?? "—"} · ${widget(node, "scheduler")?.value ?? "—"}`], ["Canvas", `${widget(node, "width")?.value ?? "—"} × ${widget(node, "height")?.value ?? "—"}`], ["ControlNet", widget(node, "h3_controlnet_name")?.value || "OFF"], ["Delivery", widget(node, "upscale_enabled")?.value ? widget(node, "upscale_mode")?.value : "NATIVE"], ["Video Editor", Boolean(widget(node,"h3_editor_enabled")?.value) ? "ON · post-master" : "OFF · direct joined master"]];
     values.splice(1,0,["Attention & memory",attentionLabel(node)]);
+    if (selectedDelivery(node) === "plate-refine") {
+      values.find(([label]) => label === "Delivery")[1] = "H3 PLATE REFINE · 2ND PASS";
+      const profile = H3_PLATE_PROFILES.find(([id]) => id === plateProfile(node));
+      values.push(["Plate Refine VRAM", profile?.[1] || plateProfile(node)]);
+      values.push(["Plate Refine sigmas", widget(node,"h3_plate_refine_sigmas")?.value]);
+      values.push(["Delivery canvas", `${widget(node,"upscale_width")?.value} × ${widget(node,"upscale_height")?.value}`]);
+    } else if (widget(node,"upscale_enabled")?.value && String(widget(node,"upscale_mode")?.value) === "h3_fast_latent_2pass") {
+      values.push(["Stage-2 windows", widget(node,"h3_fast_latent_stage2_native_windows")?.value
+        ? `COMFYUI NATIVE · DEVICE ACCUMULATION · ${widget(node,"h3_fast_latent_stage2_window")?.value || "AUTO"} ceiling · memory budget resolved at execution`
+        : "IAMCCS INTERNAL · CPU ACCUMULATION"]);
+    }
     if (widget(node,"h3_open_refine_enabled")?.value) values.find(([label]) => label === "Delivery")[1] = `OPEN-H3 REFINEMENT · ${widget(node,"h3_open_refine_scale")?.value ?? 2}× · ${widget(node,"h3_open_refine_sigma_preset")?.value || "gentle_3step"}`;
     values.push(["VEDA", widget(node,"h3_veda_enabled")?.value ? `ON · ${widget(node,"h3_veda_predictor")?.value || "auto"}` : "OFF"]);
     const list = q(".h3p-truth-list"); list.replaceChildren(); values.forEach(([label, value]) => { const row = document.createElement("div"); row.className = "h3p-truth-row"; const caption = document.createElement("span"), content = document.createElement("b"); caption.textContent = label; content.textContent = String(value ?? "—"); row.append(caption, content); list.append(row); });

@@ -2081,6 +2081,7 @@ def build_shotplan(
     longvid_terminal_endpoint_mode: str = "hard_image",
     keyframe_joint_latent_new: bool = False,
     extended_av_profile: str = "safe_8_12gb",
+    extended_av_window_policy: str = "profile",
     extended_av_pin_mode: str = "masked",
     extended_av_mask_profile: str = "exact",
     extended_av_custom_window_frames: int = 192,
@@ -2290,6 +2291,7 @@ def build_shotplan(
             )
         contract = extended.resolve_contract(
             profile=extended_av_profile,
+            window_policy=extended_av_window_policy if extended_av_root_task in {"t2va", "i2va"} else "profile",
             pin_mode=extended_av_pin_mode,
             mask_profile=extended_av_mask_profile,
             custom_window_frames=extended_av_custom_window_frames,

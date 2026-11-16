@@ -161,6 +161,7 @@ def core_masks_available() -> bool:
 def resolve_contract(
     *,
     profile: str = "safe_8_12gb",
+    window_policy: str = "profile",
     pin_mode: str = "masked",
     mask_profile: str = "exact",
     custom_window_frames: int = 192,
@@ -209,6 +210,13 @@ def resolve_contract(
         )
     if overlap >= sample_window:
         raise ValueError("FL2VA Extended AV overlap must be smaller than the technical sample window.")
+
+    window_policy = str(window_policy).strip().lower()
+    if window_policy not in {"profile", "max_native"}:
+        raise ValueError(f"Unknown Extended AV window policy: {window_policy}")
+    profile_window = sample_window
+    if window_policy == "max_native":
+        sample_window = shared_av_snap_down(362)
 
     # Universal endpoint protection. This is temporal geometry, not a VRAM
     # quality preset: every technical sample reserves a hidden suffix after the
@@ -289,6 +297,8 @@ def resolve_contract(
         "mode": EXTENDED_AV_MODE,
         "experimental": True,
         "profile": profile,
+        "window_policy": window_policy,
+        "profile_window_frames": profile_window,
         "sample_window_frames": sample_window,
         "overlap_frames": overlap,
         "boundary_runway_mode": "auto_universal",
@@ -411,7 +421,9 @@ def _sidecar_folder() -> Path:
 def sidecar_path(render_id: str, segment_index: int) -> Path:
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(render_id or "").strip())
     safe = safe or "minimax_h3_render"
-    return _sidecar_folder() / f"{safe}_seg_{int(segment_index):04d}{EXTENDED_AV_SIDECAR_SUFFIX}"
+    from .iamccs_h3_output_storage import context_file
+
+    return context_file(_sidecar_folder() / f"{safe}_seg_{int(segment_index):04d}{EXTENDED_AV_SIDECAR_SUFFIX}")
 
 
 def _identity(render_id: str, segment_index: int, video: torch.Tensor, audio: torch.Tensor) -> str:

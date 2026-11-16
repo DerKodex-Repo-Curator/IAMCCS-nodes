@@ -343,8 +343,8 @@ class MMH3ContextHandler(IndexListContextHandler):
                 del result, mod_out, modality_window
             except UnboundLocalError:
                 pass
-            import comfy.model_management
-            comfy.model_management.soft_empty_cache()
+            from comfy import model_management
+            model_management.soft_empty_cache()
 
         try:
             result_out = []

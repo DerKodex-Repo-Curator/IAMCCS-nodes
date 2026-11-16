@@ -7,6 +7,8 @@ R37/R39 generation or editor nodes.
 """
 
 from pathlib import Path
+
+import folder_paths
 from typing import Any, Dict
 
 import torch
@@ -255,6 +257,7 @@ class IAMCCS_MiniMaxH3EditorOptionalFinalR45:
                 "direct_video_path": ("STRING", {"lazy": True}),
                 "editor_video_path": ("STRING", {"lazy": True}),
             },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
     RETURN_TYPES = ("STRING", "BOOLEAN", "STRING")
@@ -281,17 +284,58 @@ class IAMCCS_MiniMaxH3EditorOptionalFinalR45:
         value = editor_video_path if name == "editor_video_path" else direct_video_path
         return [name] if value is None else []
 
-    def select(self, cine_linx, direct_video_path=None, editor_video_path=None):
+    def select(self, cine_linx, direct_video_path=None, editor_video_path=None, prompt=None, extra_pnginfo=None):
         if _shotplan(cine_linx).get("task_mode") == "reference_image":
             return {"ui": {}, "result": ("", False, "Video delivery idle · Image Generator selected")}
         enabled = self._enabled(cine_linx)
-        path = str(editor_video_path if enabled else direct_video_path or "").strip()
+        path = str((editor_video_path if enabled else direct_video_path) or "").strip()
         route = "EDITOR" if enabled else "DIRECT JOINED MASTER"
         report = (
             f"R45 optional editor gate | route={route} | "
             f"master={'ready' if path else 'waiting'} | {path or 'no final path yet'}"
         )
-        return {"ui": {"text": [report]}, "result": (path, enabled, report)}
+        ui = {"text": [report]}
+        plan = _shotplan(cine_linx)
+        settings = plan.get("final_finish")
+        if settings is None:
+            # Settings-only graphs and previously serialized plans keep the same contract.
+            from .iamccs_minimax_h3_shotboard import _h3_settings_from_cine_linx
+            settings = _h3_settings_from_cine_linx(cine_linx)
+        from .iamccs_h3_output_storage import managed_prompt, publish_film
+        from .iamccs_h3_final_finish import finishing_enabled, is_segment, is_segmented_vsr_master
+
+        source = path
+        managed = managed_prompt(prompt)
+        if path and settings.get("h3_vsr_per_segment") and is_segmented_vsr_master(Path(path)):
+            settings = {**settings, "h3_final_relay_enabled": False, "h3_final_reca_enabled": False}
+        finishing = finishing_enabled(settings)
+        complete = bool(path) and (managed or finishing) and not is_segment(Path(path))
+        if path and finishing:
+            from .iamccs_h3_final_finish import finish_master
+            if not complete:
+                report += " | final finish waiting for joined master"
+                ui["text"] = [report]
+            else:
+                finished = finish_master(path, settings)
+                path = str(finished)
+                report += f" | final finish={path}"
+                ui = {"text": [report], "images": [{
+                    "filename": finished.name,
+                    "subfolder": finished.parent.relative_to(Path(folder_paths.get_output_directory()).resolve()).as_posix(),
+                    "type": "output",
+                }], "animated": (True,)}
+        if complete and managed:
+            from .iamccs_minimax_h3_shotboard import _sidecar_json_safe
+
+            finished = publish_film(path, prompt, extra_pnginfo, _sidecar_json_safe(plan), provenance_source=source)
+            path = str(finished)
+            report += f" | film={path}"
+            ui = {"text": [report], "images": [{
+                "filename": finished.name,
+                "subfolder": finished.parent.relative_to(Path(folder_paths.get_output_directory()).resolve()).as_posix(),
+                "type": "output",
+            }], "animated": (True,)}
+        return {"ui": ui, "result": (path, enabled, report)}
 
 NODE_CLASS_MAPPINGS = {
     "IAMCCS_ShotboardVideoEditorOptionalR49": IAMCCS_ShotboardVideoEditorOptionalR49,

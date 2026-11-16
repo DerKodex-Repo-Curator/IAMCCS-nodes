@@ -9,6 +9,7 @@ acceleration and delivery routing agree for each chunk.
 """
 
 from __future__ import annotations
+# from . import iamccs_h3_move as h3_move  # MOVE disabled
 
 from .iamccs_h3_pika_flex import active as pika_active, apply_adapter as apply_pika_adapter, SIGMAS as PIKA_SIGMAS, IAMCCS_MiniMaxH3PikaFlexLazyRouter
 from .iamccs_h3_multitracks import IAMCCS_H3MultitrackAudioRouter
@@ -17,6 +18,7 @@ import functools
 import hashlib
 from .iamccs_h3_seed_policy import chunk_seed
 from .iamccs_h3_veda import apply_veda
+from .iamccs_h3_video_decoder import select_video_decoder
 from . import iamccs_h3_omni as omni
 import gc
 import json
@@ -485,6 +487,9 @@ def _apply_h3_refmod(positive, shotplan: dict[str, Any]):
 
 
 def _effective_task(cine_linx: Any, chunk: dict[str, Any]) -> str:
+    move = _resolve_shotplan(cine_linx).get("move", {})
+    if move.get("enabled"):
+        return move["native_task"]
     if chunk.get("multishot_joint_window", False):
         return "t2va"
     if chunk.get("reference_still"):
@@ -592,7 +597,10 @@ def _flf_bridge_path(render_id: str) -> Path | None:
     safe_render_id = str(render_id or "").strip()
     if not safe_render_id:
         return None
-    return Path(folder_paths.get_output_directory()) / "minimax_h3_shotboard" / "bridges" / f"last_frame_{safe_render_id}.png"
+    from .iamccs_h3_output_storage import context_file
+
+    return context_file(Path(folder_paths.get_output_directory()) / "minimax_h3_shotboard" / "bridges"
+                        / f"last_frame_{safe_render_id}.png")
 
 
 def _load_flf_bridge(render_id: str) -> torch.Tensor | None:
@@ -1894,6 +1902,7 @@ class IAMCCS_MiniMaxH3AtomicConditioningBackend:
         prompt_override="",
         motion_context=None,
         execution_prompt=None,
+        extended_conditioning_only=False,
     ):
         from comfy_extras.nodes_minimax_h3 import (
             MiniMaxH3AddGuide,
@@ -1902,6 +1911,10 @@ class IAMCCS_MiniMaxH3AtomicConditioningBackend:
         )
 
         shotplan = _effective_shotplan(cine_linx, _resolve_shotplan(cine_linx))
+        # MOVE disabled:
+        # if shotplan.get("move", {}).get("enabled") and not shotplan["move"].get("_native_prepared"):
+        #     return h3_move.prepare(self.prepare, model, clip, video_vae, audio_vae, cine_linx,
+        #                            segment_index, render_id, prompt_override, execution_prompt, reference_image=ref_image_1)
         if shotplan.get("task_mode") == "longvid_multishot_hardcut" and len(shotplan.get("chunks", [])) > 1 and isinstance(execution_prompt, dict):
             for checkpoint in execution_prompt.values():
                 if checkpoint.get("class_type") != "IAMCCS_MiniMaxH3NativeCheckpointSave":
@@ -2772,7 +2785,7 @@ class IAMCCS_MiniMaxH3AtomicConditioningBackend:
                 "sample_frames": int(motion_state.get("sample_frames", frames) or frames),
                 "preserve_native_audio_prefix": True,
             }
-        if extended_active:
+        if extended_active and not extended_conditioning_only:
             if not str(render_id or "").strip():
                 raise RuntimeError(
                     "FL2VA Extended AV continuation has no render_id. Start from chunk 1 "
@@ -3313,6 +3326,7 @@ class IAMCCS_MiniMaxH3GenerationBackendV2:
             sampler = pika_sampler if pika_sampler is not None else KSamplerSelect.execute(sampler_name="lcm")[0]
             sigmas = pika_sigmas if pika_sigmas is not None else ManualSigmas.execute(sigmas=PIKA_SIGMAS)[0]
             sampler_report = pika_report
+            LOG.info("MiniMax H3 Pika sampling | chunk=%d | %s", int(chunk_index) + 1, pika_report)
         elif fused_turbo_active and not fused_convrot:
             sigma_map = {
                 "4_step": "0.9999166, 0.9728326, 0.9230769, 0.8, 0.0",
@@ -3457,6 +3471,7 @@ class IAMCCS_MiniMaxH3GenerationBackendV2:
             sampled = sampled_payload["samples"]
             sampler_report = progressive_report
         else:
+            # sampler, sampler_report = h3_move.apply_sampler_override(shotplan, sampler, sampler_report)  # MOVE disabled
             sampled = SamplerCustomAdvanced.execute(
                 noise=noise,
                 guider=guider,
@@ -3560,7 +3575,9 @@ class IAMCCS_MiniMaxH3GenerationBackendV2:
             del noise, guider, sampler, sigmas
             cleanup_report = _clean_vram_before_decode()
 
-        native_frames = comfy_nodes.VAEDecode().decode(vae=video_vae, samples=sampled)[0]
+        decode_vae = select_video_decoder(video_vae, shotplan)
+        native_frames = comfy_nodes.VAEDecode().decode(vae=decode_vae, samples=sampled)[0]
+        del decode_vae
         guard_report = {"status": "off"}
         guard_config = shotplan.get("continuity_guard", {})
         if guard_config.get("mode", "off") == "monitor" and shotplan.get("task_mode") == "fl2va_extended_av":
@@ -3996,6 +4013,7 @@ class IAMCCS_MiniMaxH3GenerationBackendV2:
             f"pianosequenza={pianosequenza_report} | "
             f"motion_context={'on' if isinstance(motion_state, dict) and motion_state.get('active') else 'off'}"
         )
+        # return h3_move.finalize((native_frames, native_audio, bridge_last_frame, sampled, H3_FPS, report), motion_state)
         return native_frames, native_audio, bridge_last_frame, sampled, H3_FPS, report
 
 

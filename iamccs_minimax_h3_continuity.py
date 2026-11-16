@@ -489,7 +489,10 @@ def _cache_path(render_id: str, segment_index: int) -> Path | None:
     safe = str(render_id or "").strip()
     if not safe or int(segment_index) < 0:
         return None
-    return Path(folder_paths.get_output_directory()) / "minimax_h3_shotboard" / "motion_context" / f"{safe}_seg_{int(segment_index):04d}_media.pt"
+    from .iamccs_h3_output_storage import context_file
+
+    return context_file(Path(folder_paths.get_output_directory()) / "minimax_h3_shotboard" / "motion_context"
+                        / f"{safe}_seg_{int(segment_index):04d}_media.pt")
 
 
 def save_reference_media(
@@ -601,7 +604,9 @@ def _longvid_latent_tail_cache_path(render_id: str, segment_index: int) -> Path 
     safe = str(render_id or "").strip()
     if not safe or int(segment_index) < 0:
         return None
-    return (
+    from .iamccs_h3_output_storage import context_file
+
+    return context_file(
         Path(folder_paths.get_output_directory())
         / "minimax_h3_shotboard"
         / "latent_tail_experimental"

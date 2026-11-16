@@ -247,7 +247,7 @@ from .iamccs_cine_duration_lock import (
     IAMCCS_CineShotboardTailTrimPolicy,
     IAMCCS_CineShotboardFinalFrameTrim,
 )
-from .iamccs_shotboarder_exporter_pro import IAMCCS_ShotboarderAudVidExporterPRO
+from .iamccs_shotboarder_exporter_pro import IAMCCS_EditaMasterFinish, IAMCCS_ShotboarderAudVidExporterPRO
 from .iamccs_cine_temporal_cut_barrier import IAMCCS_CineTemporalCutBarrier
 
 from .iamccs_ltx2_temporal_overlap_samplers import (
@@ -644,6 +644,7 @@ NODE_CLASS_MAPPINGS = {
     "IAMCCS_CineLatentDurationCrop": IAMCCS_CineLatentDurationCrop,
     "IAMCCS_CineShotboardTailTrimPolicy": IAMCCS_CineShotboardTailTrimPolicy,
     "IAMCCS_CineShotboardFinalFrameTrim": IAMCCS_CineShotboardFinalFrameTrim,
+    "IAMCCS_EditaMasterFinish": IAMCCS_EditaMasterFinish,
     "IAMCCS_shotboarder_aud+vid_exporter_PRO": IAMCCS_ShotboarderAudVidExporterPRO,
     "IAMCCS_CineTemporalCutBarrier": IAMCCS_CineTemporalCutBarrier,
     "IAMCCS_CinePromptRelaySafeEncode": IAMCCS_CinePromptRelaySafeEncode,
@@ -991,6 +992,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "IAMCCS_CineLatentDurationCrop": "IAMCCS Cine Latent Duration Crop",
     "IAMCCS_CineShotboardTailTrimPolicy": "IAMCCS Cine Shotboard Tail Trim Policy",
     "IAMCCS_CineShotboardFinalFrameTrim": "IAMCCS Cine Shotboard Final Frame Trim",
+    "IAMCCS_EditaMasterFinish": "IAMCCS EDITA Master Finish",
     "IAMCCS_shotboarder_aud+vid_exporter_PRO": "IAMCCS Shotboarder Aud+Vid Exporter PRO",
     "IAMCCS_CineTemporalCutBarrier": "IAMCCS Cine Temporal Cut Barrier (Experimental)",
     "IAMCCS_CinePromptRelaySafeEncode": "IAMCCS Cine PromptRelay Safe Encode",
@@ -2886,6 +2888,8 @@ def setup_api_routes() -> None:
         try:
             from .iamccs_minimax_h3_asset_library import register_routes as register_h3_asset_routes
             register_h3_asset_routes(routes, web)
+            from .iamccs_h3_output_storage import register_routes as register_h3_storage_routes
+            register_h3_storage_routes(routes, web, PromptServer.instance)
         except Exception as exc:
             logging.getLogger("IAMCCS.API").warning("H3 asset library routes unavailable: %r", exc)
 
@@ -3174,3 +3178,9 @@ from .iamccs_minimax_h3_open_refine import (
 )
 NODE_CLASS_MAPPINGS.update(_OPEN_H3_REFINE_CLASSES)
 NODE_DISPLAY_NAME_MAPPINGS.update(_OPEN_H3_REFINE_NAMES)
+
+# IAMCCS MOVE: additive R49 mode/engine; other modes keep their native routes.
+# MOVE disabled; retained as comments for a future review.
+# from .iamccs_h3_move import IAMCCS_H3MoveEngine
+# NODE_CLASS_MAPPINGS["IAMCCS_H3MoveEngine"] = IAMCCS_H3MoveEngine
+# NODE_DISPLAY_NAME_MAPPINGS["IAMCCS_H3MoveEngine"] = "IAMCCS MOVE · R49 Engine"

@@ -30,9 +30,9 @@ def configure(plan, settings):
     plan["pika_flex"] = {"enabled": enabled}
     if not enabled:
         return
-    supported = {"t2va", "i2va", "fl2va", "ref2va", "v2va_face_swap_lora", "ref2va_vfx_edit", "ref2vid_lipsync", "auto_from_timeline"}
+    supported = {"t2va", "i2va", "fl2va", "fl2va_extended_av", "ref2va", "v2va_face_swap_lora", "ref2va_vfx_edit", "ref2vid_lipsync", "auto_from_timeline"}
     if str(plan.get("task_mode")) not in supported:
-        raise ValueError("Pika Flex: this continuation/experimental engine has no validated six-NFE branch. Use T2VA, I2VA, FL2VA or REF2VA.")
+        raise ValueError("Pika Flex: this continuation/experimental engine has no validated six-NFE branch. Use T2VA, I2VA, FL2VA, REF2VA or Extended AV.")
     if settings.get("h3_omni_enabled") or str(settings.get("turbo_mode", "off")) != "off":
         raise ValueError("Pika Flex: disable FastH3 Omni and additional Turbo; select PIKA FLEX · 6 STEP.")
     plan["pika_flex"].update({

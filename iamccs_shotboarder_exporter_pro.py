@@ -1139,5 +1139,38 @@ class IAMCCS_ShotboarderAudVidExporterPRO:
         }
 
 
-NODE_CLASS_MAPPINGS = {NODE_ID: IAMCCS_ShotboarderAudVidExporterPRO}
+class IAMCCS_EditaMasterFinish:
+    """Apply optional finishing to a completed EDITA master file."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        from .iamccs_h3_final_finish import FIELDS
+
+        return {
+            "required": {"master_path": ("STRING",)},
+            "optional": dict(FIELDS),
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("output_path",)
+    FUNCTION = "finish"
+    OUTPUT_NODE = True
+    CATEGORY = "IAMCCS/Cine/Export"
+
+    def finish(self, master_path, h3_final_relay_scale="2", **settings):
+        from .iamccs_h3_final_finish import _count_frames, _stream_spec, finish_master
+
+        source = Path(master_path)
+        if source.suffix.lower() != ".mp4":
+            raise ValueError("EDITA Master Finish expects an H.264 / AAC MP4 export.")
+        output = finish_master(source, settings, relay_scale=int(h3_final_relay_scale))
+        width, height, fps, _ = _stream_spec(output)
+        preview = _output_preview_descriptor(output, fps, _count_frames(output), width, height)
+        return {
+            "ui": {"gifs": [preview], "iamccs_exporter_preview": [preview]},
+            "result": (str(output),),
+        }
+
+
+NODE_CLASS_MAPPINGS = {NODE_ID: IAMCCS_ShotboarderAudVidExporterPRO, "IAMCCS_EditaMasterFinish": IAMCCS_EditaMasterFinish}
 NODE_DISPLAY_NAME_MAPPINGS = {NODE_ID: "IAMCCS Shotboarder Aud+Vid Exporter PRO"}

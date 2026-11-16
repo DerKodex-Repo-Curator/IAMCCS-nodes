@@ -29,7 +29,7 @@ def test_disabled_profile_preserves_sampling():
     assert not P.active(p)
 
 
-@pytest.mark.parametrize("mode", ["t2va", "i2va", "fl2va", "ref2va"])
+@pytest.mark.parametrize("mode", ["t2va", "i2va", "fl2va", "ref2va", "fl2va_extended_av"])
 def test_exact_six_nfe_contract_preserves_seed(mode):
     p = plan(mode)
     P.configure(p, settings())
@@ -49,7 +49,7 @@ def test_rejects_stacked_speed_profiles(change):
 
 def test_experimental_continuation_is_explicitly_unavailable():
     with pytest.raises(ValueError, match="continuation"):
-        P.configure(plan("fl2va_extended_av"), settings())
+        P.configure(plan("guided_av_loop_experimental"), settings())
 
 
 @pytest.mark.parametrize("mode,expected", [("i2va", "fl.safetensors"), ("ref2va", "ref.safetensors")])

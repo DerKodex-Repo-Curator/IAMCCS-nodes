@@ -30,6 +30,10 @@ from .iamccs_h3_character_swap_lora import settings_schema as character_swap_sch
 from .iamccs_h3_vfx_edit import settings_schema as vfx_edit_schema
 from .iamccs_h3_omni import configure as configure_omni
 from .iamccs_h3_pika_flex import configure as configure_pika, schema as pika_schema, PROFILE as PIKA_PROFILE, VALUES as PIKA_VALUES
+from .iamccs_h3_video_decoder import configure as configure_video_decoder, schema as video_decoder_schema
+from .iamccs_h3_final_finish import FIELDS as final_finish_schema, configuration as final_finish_configuration
+from .iamccs_h3_plate_refine import configure as configure_plate_refine, schema as plate_refine_schema
+# from . import iamccs_h3_move as h3_move  # MOVE disabled
 from .iamccs_h3_continuity_guard import settings_schema as continuity_guard_schema, configuration as continuity_guard_configuration
 from .iamccs_minimax_h3_open_refine import settings_schema as open_h3_refine_schema, configuration as open_h3_refine_configuration
 
@@ -1107,7 +1111,9 @@ def _bridge_directory() -> Path:
 
 
 def _bridge_path(render_id: str) -> Path:
-    return _bridge_directory() / f"last_frame_{_safe_name(render_id, 'default')}.png"
+    from .iamccs_h3_output_storage import context_file
+
+    return context_file(_bridge_directory() / f"last_frame_{_safe_name(render_id, 'default')}.png")
 
 
 def _save_frame(path: Path, frame: torch.Tensor) -> None:
@@ -2071,19 +2077,50 @@ def _load_continuation_chain(checkpoint_value: Any, _seen: set[Path] | None = No
         return None
     if not isinstance(payload, dict) or payload.get("schema") != "iamccs.minimax_h3.continuation_chain.v1":
         return None
+    if payload.get("archived_master") is True:
+        from .iamccs_h3_output_storage import archived_continuation_master
+
+        master = archived_continuation_master(payload)
+        if master is None:
+            LOG.warning("MiniMax H3 continuation archive unavailable | checkpoint=%s", checkpoint)
+            return None
+        return {**payload, "resolved_checkpoint": checkpoint, "resolved_segments": [master],
+                "resolved_soft_segments": [master], "resolved_master": master}
     paths: list[Path] = []
+    missing_media = False
     for item in payload.get("segments", []):
         try:
             candidate = _resolve_output_media_path(item)
         except Exception:
+            missing_media = True
             continue
         if candidate.is_file():
             paths.append(candidate)
+        else:
+            missing_media = True
     # Repair/extend early v1 sidecars that stored only the current clip even
     # though parent_checkpoint was present. Recursing through original MP4
     # assets keeps A+B(+C) lossless and also makes already-created B checkpoints
     # usable without deleting their preview or manifest.
     parent_value = payload.get("parent_checkpoint")
+    if missing_media or not paths:
+        # Old manifests may still have the complete movie even if their pieces
+        # are gone. A child-only preview must never stand in for a full chain.
+        if payload.get("master_path"):
+            master = _resolve_output_media_path(payload["master_path"])
+            if master.is_file():
+                try:
+                    metadata = json.loads(_segment_meta_path(master).read_text(encoding="utf-8"))
+                    generation = metadata.get("generation", {})
+                except (OSError, ValueError, AttributeError):
+                    generation = {}
+                cumulative = isinstance(generation, dict) and generation.get("run_and_gun") is True
+                if not parent_value or cumulative:
+                    return {**payload, "resolved_checkpoint": checkpoint, "resolved_segments": [master],
+                            "resolved_soft_segments": [master], "resolved_master": master}
+        if missing_media:
+            LOG.warning("MiniMax H3 continuation chain incomplete | checkpoint=%s", checkpoint)
+            return None
     if parent_value:
         parent_chain = _load_continuation_chain(parent_value, _seen)
         if isinstance(parent_chain, dict):
@@ -2112,7 +2149,7 @@ def _load_continuation_chain(checkpoint_value: Any, _seen: set[Path] | None = No
     # Soft lineage is optional and append-only. Old checkpoints deliberately
     # fall back to their original segments, so the first new Soft AV boundary
     # can upgrade a legacy A checkpoint without migration.
-    result["resolved_soft_segments"] = soft_paths if soft_paths else list(paths)
+    result["resolved_soft_segments"] = soft_paths if len(soft_paths) == len(paths) else list(paths)
     master = payload.get("master_path")
     if master:
         try:
@@ -2130,6 +2167,7 @@ def _write_continuation_chain(
     soft_segments: list[Path] | None = None,
     master_path: Path | None = None,
     parent_checkpoint: Any = None,
+    archived_master: bool = False,
 ) -> Path:
     checkpoint = Path(checkpoint_path).resolve()
     sidecar = _continuation_chain_sidecar(checkpoint)
@@ -2142,6 +2180,8 @@ def _write_continuation_chain(
         "master_path": _portable_output_path(master_path) if master_path is not None else "",
         "parent_checkpoint": _portable_output_path(_resolve_output_media_path(parent_checkpoint)) if str(parent_checkpoint or "").strip() else "",
     }
+    if archived_master:
+        payload["archived_master"] = True
     sidecar.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return sidecar
 
@@ -2740,7 +2780,8 @@ def _resolve_native_master_path(expected: Path, render_id: str, total_segments: 
     return expected
 
 
-def _next_numbered_render_id(output_folder: Path, base_name: str, requested_render_id: str) -> str:
+def _next_numbered_render_id(output_folder: Path, base_name: str, requested_render_id: str,
+                             saved_take_folder: Path | None = None) -> str:
     """Return a never-reused render id with a monotonically increasing suffix.
 
     Historical unnumbered outputs count as render 0001. Every stage label is
@@ -2767,6 +2808,12 @@ def _next_numbered_render_id(output_folder: Path, base_name: str, requested_rend
             continue
         suffix = match.group(1)
         used_numbers.add(int(suffix) if suffix is not None else 1)
+    if saved_take_folder is not None:
+        saved_take = re.compile(rf"^{escaped_root}(?:_(\d{{4,}}))?_\d{{5,}}\.safetensors$", re.IGNORECASE)
+        for path in saved_take_folder.glob(f"{root}_*.safetensors"):
+            match = saved_take.fullmatch(path.name)
+            if match:
+                used_numbers.add(int(match[1]) if match[1] else 1)
 
     next_number = max(used_numbers, default=0) + 1
     while True:
@@ -3678,6 +3725,10 @@ class IAMCCS_MiniMaxH3ShotPlanner:
         if text_encoder_device not in {"gpu_auto", "cpu_direct"}:
             text_encoder_device = "gpu_auto"
         audio_mode = _normalise_h3_audio_mode(audio_mode)
+        # MOVE disabled:
+        # move_requested = str(task_mode or "").strip().lower() == h3_move.MODE
+        # if move_requested:
+        #     task_mode = h3_move.native_task(saved_settings)
         requested_task_key = str(task_mode or "").strip().lower()
         # LongVid lip-sync deliberately remains on the proven T2VA/AddGuide
         # topology.  The older REF2VA+AddGuide hybrid is accepted only as a
@@ -4070,6 +4121,7 @@ class IAMCCS_MiniMaxH3ShotPlanner:
             ),
             keyframe_joint_latent_new=bool(saved_settings.get("keyframe_joint_latent_new", True)),
             extended_av_profile=str(extended_av_profile or "safe_8_12gb"),
+            extended_av_window_policy=str(saved_settings.get("extended_av_window_policy", "max_native")),
             extended_av_pin_mode=str(extended_av_pin_mode or "masked"),
             extended_av_mask_profile=str(extended_av_mask_profile or "exact"),
             extended_av_custom_window_frames=int(extended_av_custom_window_frames or 192),
@@ -4084,6 +4136,14 @@ class IAMCCS_MiniMaxH3ShotPlanner:
             extended_av_boundary_polish_ms=float(extended_av_boundary_polish_ms),
             extended_av_boundary_polish_strength=float(extended_av_boundary_polish_strength),
         )
+        if plan.get("extended_av", {}).get("window_policy") == "max_native":
+            LOG.info(
+                "H3 Continuous/Evolving max window | root=%s | sampled=%df | context=%df | hidden_tail=%df | first_visible=%df | continuation_capacity=%df | segments=%d",
+                plan["extended_av_root_task"], plan["chunk_max_frames"],
+                plan["extended_av"]["overlap_frames"], plan["extended_av"]["boundary_runway_frames"],
+                plan["chunks"][0]["visible_frame_count"], plan["extended_av"]["unique_capacity_frames"],
+                len(plan["chunks"]),
+            )
         if isinstance(plan, dict):
             plan["duration_authority"] = (
                 "settings_pro" if "duration_seconds" in external_settings else "shotboard"
@@ -4612,6 +4672,7 @@ class IAMCCS_MiniMaxH3ShotPlanner:
             "fast_latent_temporal_chunk": h3_fast_latent_temporal_chunk,
             "fast_latent_stage2_window": h3_fast_latent_stage2_window,
             "fast_latent_stage2_overlap": h3_fast_latent_stage2_overlap,
+            "fast_latent_stage2_native_windows": bool(saved_settings.get("h3_fast_latent_stage2_native_windows", False)),
             "fast_latent_stage2_guides": str(saved_settings.get("h3_fast_latent_stage2_guides", "soft")).lower(),
             "keep_models_resident": bool(saved_settings.get("h3_upres_keep_models_resident", False)),
             "steps": max(1, int(_finite_float(saved_settings.get("h3_upres_steps", 1), 1, 1, 20))),
@@ -4742,8 +4803,12 @@ class IAMCCS_MiniMaxH3ShotPlanner:
             "source": "IAMCCS_ShotboardH3Settings" if _h3_settings_from_cine_linx(cine_linx) else "shotboard_defaults",
         }
         plan["open_h3_refine"] = open_h3_refine_configuration(saved_settings)
+        plan["final_finish"] = final_finish_configuration(saved_settings)
         configure_omni(plan, saved_settings)
         configure_pika(plan, saved_settings)
+        configure_video_decoder(plan, saved_settings, folder_paths.get_filename_list("vae"))
+        configure_plate_refine(plan, saved_settings)
+        # h3_move.configure(plan, saved_settings, move_requested)  # MOVE disabled
         chunk_frames = [int(chunk.get("frame_count", 0) or 0) for chunk in plan.get("chunks", [])]
         max_chunk_frames = max(chunk_frames, default=0)
         native_load = (float(width) * float(height) * max(1, max_chunk_frames)) / (960.0 * 544.0 * 124.0)
@@ -5498,7 +5563,19 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
         if current_segment < 0 or total_segments < 1 or current_segment >= total_segments:
             raise ValueError(f"Native checkpoint segment index is invalid: {current_segment + 1}/{total_segments}")
 
-        output_folder, base_name = _output_location(filename_prefix)
+        from .iamccs_h3_output_storage import managed_prompt, publish_film, segment_directory
+
+        managed = managed_prompt(prompt)
+        saved_take_folder = None
+        if managed:
+            from .iamccs_minimax_h3_asset_library import _roots
+
+            saved_take_folder = _roots("continuation")[0]
+            base_name = _safe_name(str(filename_prefix).replace("\\", "/").rsplit("/", 1)[-1], "native_segment")
+            output_folder = segment_directory(prompt, None, "Native")
+            output_folder.mkdir(parents=True, exist_ok=True)
+        else:
+            output_folder, base_name = _output_location(filename_prefix)
         requested_render_id = _safe_name(str(render_id or "").strip(), "minimax_h3_render")
         safe_stage_label = _safe_name(str(stage_label or "native").strip(), "native")
         locked_render_id = str(resolved_render_id or "").strip()
@@ -5506,7 +5583,7 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
             active_render_id = _safe_name(locked_render_id, requested_render_id)
         else:
             active_render_id = (
-                _next_numbered_render_id(output_folder, base_name, requested_render_id)
+                _next_numbered_render_id(output_folder, base_name, requested_render_id, saved_take_folder)
                 if current_segment == 0
                 else requested_render_id
             )
@@ -5903,6 +5980,7 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
         inherited_soft_segments: list[Path] = []
         run_and_gun_master: Path | None = None
         run_and_gun_soft_segments: list[Path] = []
+        continuation_archive: Path | None = None
 
         if is_final_segment:
             # Preserve the original per-shot assets as chain truth.  The
@@ -5957,8 +6035,8 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
                         continuation.get("checkpoint"),
                     )
                     messages.append(
-                        "RUN & GUN skipped: selected source checkpoint has no IAMCCS chain sidecar. "
-                        "Regenerate/save the source clip once with this patch, then continue from that checkpoint."
+                        "RUN & GUN skipped: the selected checkpoint has no complete source movie. "
+                        "Restore its source media or save a new source take and continue from it."
                     )
                 else:
                     all_chain_segments = inherited_segments + current_chain_segments
@@ -6041,9 +6119,11 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
                         },
                         source_workflow=extra_pnginfo.get("workflow") if isinstance(extra_pnginfo, dict) else None,
                     )
+                    if managed:
+                        run_and_gun_master = publish_film(run_and_gun_master, prompt, extra_pnginfo, provenance_plan)
                     preview_path = run_and_gun_master
                     messages.append(
-                        f"RUN & GUN cumulative master saved: {rag_name} "
+                        f"RUN & GUN cumulative master saved: {run_and_gun_master.name} "
                         f"({len(all_chain_segments)} source segment asset(s), join={applied_join})"
                     )
 
@@ -6060,6 +6140,20 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
                 IAMCCS_MiniMaxH3ContinuationAnalyze,
                 IAMCCS_MiniMaxH3ContinuationSave,
             )
+
+            if managed and run_and_gun_master is None:
+                # A first Saved Take also needs a durable source for its next join.
+                source = Path(preview_path)
+                if len(current_chain_segments) > 1 and source in current_chain_segments:
+                    source = output_folder / f"{base_name}_{active_render_id}_{safe_stage_label}_continuation_source_full.mp4"
+                    _require_new_output_path(source)
+                    _concat_videos(current_chain_segments, source)
+                    _write_segment_metadata(
+                        source, _joined_frame_count(current_chain_segments, 0), fps,
+                        provenance={"render_id": active_render_id, "stage": safe_stage_label,
+                                    "segment_files": [path.name for path in current_chain_segments]},
+                    )
+                continuation_archive = publish_film(source, prompt, extra_pnginfo, provenance_plan)
 
             analysis = IAMCCS_MiniMaxH3ContinuationAnalyze().analyze(
                 images,
@@ -6080,7 +6174,13 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
                 preview_image=bridge_source,
                 visible_frame_count=int(images.shape[0]) if torch.is_tensor(images) and images.ndim == 4 else 0,
             )
-            chain_segments = inherited_segments + current_chain_segments
+            durable_prefix = managed and (run_and_gun_master is not None or not continuation.get("enabled"))
+            master_path = run_and_gun_master or continuation_archive or (preview_path if Path(preview_path).is_file() else None)
+            if durable_prefix:
+                chain_segments = [master_path]
+            else:
+                current_media = [continuation_archive] if continuation_archive else current_chain_segments
+                chain_segments = inherited_segments + current_media
             chain_id = (
                 str(inherited_chain.get("chain_id", "") or "")
                 if isinstance(inherited_chain, dict)
@@ -6090,9 +6190,10 @@ class IAMCCS_MiniMaxH3NativeCheckpointSave:
                 saved_path,
                 chain_id=chain_id,
                 segments=chain_segments or current_chain_segments,
-                soft_segments=run_and_gun_soft_segments,
-                master_path=run_and_gun_master or (preview_path if Path(preview_path).is_file() else None),
+                soft_segments=chain_segments if durable_prefix else run_and_gun_soft_segments,
+                master_path=master_path,
                 parent_checkpoint=(continuation.get("checkpoint") if bool(continuation.get("enabled", False)) else ""),
+                archived_master=durable_prefix,
             )
             messages.append(
                 f"Continuation terminal AV saved: {saved_path} ({saved_info}) | "
@@ -7373,7 +7474,7 @@ class IAMCCS_ShotboardH3Settings:
                 "default": "AUTO",
                 "display_name": "07 · H3 DELIVERY UPRES · FAST LATENT STAGE2 WINDOW",
                 "tooltip": (
-                    "Temporal window for the H3 Stage-2 refine. AUTO uses a conservative GPU-aware window; RTX 3060/12GB at ~1.4MP resolves to 56 frames. FULL reproduces the old all-frames-at-once sampler and can OOM on 12GB."
+                    "Stage-2 window. CPU-safe mode: AUTO uses the existing GPU-aware policy; FULL samples all frames at once. Native mode: AUTO starts at 107 frames; manual values and FULL are upper limits, reduced on the H3 grid to fit estimated device memory. Canvas, FPS and duration are unchanged."
                 ),
             }),
             "h3_fast_latent_stage2_overlap": (["AUTO", "5", "22"], {
@@ -7574,6 +7675,18 @@ class IAMCCS_ShotboardH3Settings:
             }),
             **open_h3_refine_schema(),
             **pika_schema(folder_paths.get_filename_list("loras")),
+            "extended_av_window_policy": (["max_native", "profile"], {
+                "default": "max_native", "display_name": "CONTINUOUS / EVOLVING · segment length",
+                "tooltip": "I2V/T2V long takes: max_native fills every technical run up to the shared AV limit (345 frames), preserving context and the hidden tail. Requires more memory than short-window presets. profile restores the selected profile/custom window. Other generation modes are unchanged.",
+            }),
+            "h3_fast_latent_stage2_native_windows": ("BOOLEAN", {
+                "default": False, "display_name": "Native Stage-2 Windows · Experimental",
+                "tooltip": "H3 2-Pass Upres only. OFF preserves IAMCCS CPU accumulation. ON uses ComfyUI native windows and device accumulation, adapting window length to available memory. Full-clip buffers are budgeted too; an unsafe estimate stops before sampling. No automatic fallback or canvas change. Memory estimates cannot guarantee against OOM; speed and visual quality require comparison.",
+            }),
+            **video_decoder_schema(),
+            **plate_refine_schema(),
+            **final_finish_schema,
+            # **h3_move.schema(),  # MOVE disabled
         })}
 
     RETURN_TYPES = (SUPERNODE_LINX_TYPE,)
@@ -7582,6 +7695,8 @@ class IAMCCS_ShotboardH3Settings:
     CATEGORY = f"{CATEGORY}/Settings"
 
     def export(self, **kwargs):
+        # MOVE-specific validation is archived with its schema.
+        # validate_settings(kwargs, task=h3_move.native_task(kwargs) if kwargs.get("task_mode")==h3_move.MODE else None)
         validate_settings(kwargs)
         settings = {
             str(name): copy.deepcopy(value)

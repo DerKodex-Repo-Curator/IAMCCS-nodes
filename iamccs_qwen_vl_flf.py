@@ -229,6 +229,7 @@ class _FLFMixin:
         top_p,
         num_beams,
         repetition_penalty,
+        system_prompt="",
     ):
         """Build a two-image conversation: [first_frame, last_frame, text prompt]."""
         content = []
@@ -243,7 +244,10 @@ class _FLFMixin:
 
         content.append({"type": "text", "text": prompt_text})
 
-        conversation = [{"role": "user", "content": content}]
+        conversation = []
+        if system_prompt.strip():
+            conversation.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+        conversation.append({"role": "user", "content": content})
 
         chat = self.processor.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True
@@ -304,6 +308,7 @@ class _FLFMixin:
         attention_mode,
         use_torch_compile,
         device,
+        system_prompt="",
     ):
         from comfy.utils import ProgressBar
         pbar = ProgressBar(3)
@@ -336,6 +341,7 @@ class _FLFMixin:
                 top_p,
                 num_beams,
                 repetition_penalty,
+                system_prompt,
             )
             pbar.update_absolute(3, 3, None)
             return (text,)
@@ -475,6 +481,7 @@ def _build_node_classes():
                     "seed": ("INT", {"default": 1, "min": 1, "max": 2**32 - 1,   "tooltip": FLF_TOOLTIPS["seed"]}),
                 },
                 "optional": {
+                    "system_prompt": ("STRING", {"default": "", "multiline": True}),
                     "first_frame": ("IMAGE", {"tooltip": FLF_TOOLTIPS["first_frame"]}),
                     "last_frame":  ("IMAGE", {"tooltip": FLF_TOOLTIPS["last_frame"]}),
                 },
@@ -508,12 +515,13 @@ def _build_node_classes():
             seed,
             first_frame=None,
             last_frame=None,
+            system_prompt="",
         ):
             return self.run_flf(
                 model_name, quantization, preset_prompt, custom_prompt,
                 first_frame, last_frame,
                 max_tokens, temperature, top_p, num_beams, repetition_penalty,
-                seed, keep_model_loaded, attention_mode, use_torch_compile, device,
+                seed, keep_model_loaded, attention_mode, use_torch_compile, device, system_prompt,
             )
 
     # ------------------------------------------------------------------

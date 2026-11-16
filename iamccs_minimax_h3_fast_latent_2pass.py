@@ -13,15 +13,18 @@ import copy
 import gc
 import importlib
 import logging
+import math
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import folder_paths
+import comfy.model_management as model_management
 import torch
 import torch.nn.functional as F
 
+from . import iamccs_minimax_h3_extended_av as extended_av
 from .iamccs_minimax_h3_atomic_backend import (
     SUPERNODE_LINX_TYPE,
     IAMCCS_MiniMaxH3AtomicConditioningBackend,
@@ -317,14 +320,28 @@ def _upscale_video_latent(video_latent, plan, width, height):
     raise RuntimeError("FAST LATENT 2-PASS learned upres did not execute")
 
 
-def _locked_av_latent(upscaled_video, original_audio):
+def _locked_av_latent(upscaled_video, original_audio, *, extended_parent=None, extended_contract=None):
     video = dict(upscaled_video)
     audio = dict(original_audio)
     video["noise_mask"] = torch.ones_like(video["samples"])
     # Stage 2 is a visual refinement.  The native H3 audio latent remains the
     # exact phonetic/timing authority and is never re-denoised.
     audio["noise_mask"] = torch.zeros_like(audio["samples"])
-    return _concat_av(video, audio)
+    latent = _concat_av(video, audio)
+    if extended_parent is None:
+        return latent
+
+    from comfy.nested_tensor import NestedTensor
+
+    _, locked_audio_mask = latent.pop("noise_mask").unbind()
+    pinned, _, details = extended_av.apply_prefix(
+        latent, None, extended_parent, contract={**extended_contract, "video_only": True},
+    )
+    video_mask, _ = pinned["noise_mask"].unbind()
+    pinned["noise_mask"] = NestedTensor((video_mask, locked_audio_mask))
+    LOG.info("FAST LATENT Stage-2 EXTEND masked BEFORE pin | overlap=%df | video_tokens=%d | audio=locked",
+             details["overlap_frames"], details["video_tokens"])
+    return pinned
 
 
 def _check_segment_parity(plan, index, total, native_frames, native_audio):
@@ -504,6 +521,7 @@ def _target_conditioning(model, clip, video_vae, audio_vae, cine_linx, segment_i
         ref_video=ref_video,
         ref_video_audio=ref_video_audio,
         ref_audio=ref_audio,
+        extended_conditioning_only=task_mode == extended_av.EXTENDED_AV_MODE,
     )
     target_conditioning = result[1]
     if true_long_geometry is not None:
@@ -576,6 +594,50 @@ def _stage2_window_policy(plan: dict[str, Any]) -> tuple[int | None, int, str]:
     return window, overlap, source
 
 
+def _native_stage2_window_policy(model, video, audio, upres, common):
+    """Budget native device accumulators separately from window activations."""
+    device = model.load_device
+    free = min(model.get_free_memory(device), model_management.get_total_memory(device))
+    reserve = model_management.minimum_inference_memory()
+    modalities = [video] if audio is None else [video, audio]
+    # Sampling promotes latents to float32. Allow full-timeline input, noise,
+    # masks, two prediction accumulators and packing/sampler temporaries.
+    timeline_bytes = sum(t.numel() * max(4, t.element_size()) for t in modalities)
+    buffers = timeline_bytes * 8
+    ram_free = model_management.get_free_memory(torch.device("cpu"))
+    if timeline_bytes * 2 + reserve > ram_free:
+        raise RuntimeError("Native Stage-2 needs more available system RAM for this full clip. Disable Native Stage-2 Windows or shorten the clip.")
+    requested = str(upres.get("fast_latent_stage2_window", "AUTO") or "AUTO").upper()
+    total_frames = common.latents_to_frames(int(video.shape[2]))
+    ceiling = total_frames if requested == "FULL" else int(requested) if requested.isdigit() else 107
+    ceiling = max(22, min(ceiling, total_frames))
+    ceiling = 5 + ((ceiling - 5) // 17) * 17
+    for frames in range(ceiling, 21, -17):
+        window_t = common.frames_to_latents(frames)
+        video_elements = int(video.shape[1]) * window_t * math.prod(video.shape[3:])
+        audio_elements = 0 if audio is None else (
+            (audio.numel() // int(video.shape[0]) * window_t + int(video.shape[2]) - 1)
+            // int(video.shape[2])
+        )
+        # H3's memory estimator consumes the packed AV shape, not video BCHTW.
+        activation = model.memory_required([int(video.shape[0]), 1, video_elements + audio_elements]) * 1.5
+        if buffers + activation + reserve <= free:
+            overlap_requested = str(upres.get("fast_latent_stage2_overlap", "AUTO")).upper()
+            overlap = int(overlap_requested) if overlap_requested.isdigit() else (22 if frames >= 56 else 5)
+            overlap = min(overlap, frames - 17)
+            gib = 1024 ** 3
+            report = (f"NATIVE_ADAPTIVE:{requested}->{frames}f/{overlap}f"
+                      f"; device={device}; free={free / gib:.2f}GiB"
+                      f"; buffers={buffers / gib:.2f}GiB; activation_est={activation / gib:.2f}GiB"
+                      f"; reserve={reserve / gib:.2f}GiB; ram_free={ram_free / gib:.2f}GiB")
+            return frames, overlap, report
+    raise RuntimeError(
+        "Native Stage-2 cannot fit the full-clip device buffers plus the minimum 22-frame window "
+        "in currently available memory. Disable Native Stage-2 Windows to restore CPU accumulation, "
+        "free memory, or shorten the clip. Resolution and frame rate were not changed."
+    )
+
+
 def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
     from comfy_extras.nodes_custom_sampler import BasicGuider, SamplerCustomAdvanced
     from .iamccs_minimax_h3_pixel_refine_variant import _provider
@@ -585,7 +647,10 @@ def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
     )
     guider = _result_item(BasicGuider.execute(model=active_model, conditioning=conditioning), 0)
     plan = _resolve_shotplan(cine_linx)
-    window_frames, overlap_frames, policy_source = _stage2_window_policy(plan)
+    upres = _upres_settings(plan)
+    native_windows = bool(upres.get("fast_latent_stage2_native_windows", False))
+    if not native_windows:
+        window_frames, overlap_frames, policy_source = _stage2_window_policy(plan)
 
     # Preserve the Stage-2 guide contract before either full or windowed sampling.
     # Masked still guides are pinned on the H3 temporal token while audio stays
@@ -594,6 +659,22 @@ def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
     original_video, original_audio = common.unpack_av(
         latent, "FAST LATENT Stage-2 source"
     )
+    extended_mode = plan.get("task_mode") == extended_av.EXTENDED_AV_MODE
+
+    def select_sample(result):
+        if not extended_mode:
+            return _result_item(result, 1)
+        # EXTEND uses the final masked sampler state for video. Its AV output
+        # can round the audio during model-format conversion, so the Stage-1
+        # audio remains the authoritative stream in the saved HIGH sidecar.
+        sampled = _result_item(result, 0)
+        video, sampled_audio = common.unpack_av(sampled, "FAST LATENT EXTEND sampled AV")
+        if sampled_audio.shape != original_audio.shape:
+            raise RuntimeError("FAST LATENT EXTEND changed the audio latent extent")
+        return common.pack_av(
+            sampled, video, original_audio.to(video.device), noise_mask=sampled.get("noise_mask"),
+        )
+
     guide_mode = str(_upres_settings(plan).get("fast_latent_stage2_guides", "soft")).lower()
     if guide_mode == "masked":
         from comfy.nested_tensor import NestedTensor
@@ -621,7 +702,7 @@ def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
                 int(pinned_count),
             )
 
-    if window_frames is None:
+    if not native_windows and window_frames is None:
         LOG.warning(
             "FAST LATENT 2-PASS Stage-2 policy=FULL; all frames will be refined in one H3 sample. "
             "This can OOM on 12GB GPUs at HD delivery resolutions."
@@ -629,67 +710,72 @@ def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
         sampled = SamplerCustomAdvanced.execute(
             noise=noise, guider=guider, sampler=sampler, sigmas=sigmas, latent_image=latent,
         )
-        return _result_item(sampled, 1), sampling_report + "; stage2=FULL"
+        return select_sample(sampled), sampling_report + "; stage2=FULL"
 
-    # PSkf Stage 2 stays on one coherent denoise trajectory. IAMCCS evaluates
-    # H3-aligned windows at every sigma step and pyramid-blends the predictions
-    # before advancing the sampler. This is an internal provider: no external
-    # node registry lookup or external provider dependency. First-pass PSkf remains
-    # deliberately untouched.
-    windows_provider = _provider("nodes_windows")
-    total_frames = common.latents_to_frames(int(original_video.shape[2]))
-    length, overlap, _total_f, _total_t, windows = windows_provider._plan(
-        total_frames,
-        int(window_frames),
-        int(overlap_frames),
-        windows_provider.ContextSchedules.STATIC_STANDARD,
-    )
-    patched = windows_provider.MMH3ContextWindows.execute(
-        model=active_model,
-        context_length=int(length),
-        context_overlap=int(overlap),
-        fuse_method=windows_provider.ContextFuseMethods.PYRAMID,
-        context_schedule=windows_provider.ContextSchedules.STATIC_STANDARD,
-        context_stride=1,
-        freenoise=False,
-        split_conds_to_windows=False,
-        # Full-timeline accumulators on GPU leave too little activation headroom
-        # on 12 GB cards and trigger catastrophic WDDM paging. CPU accumulation
-        # preserves the same values and transfers only window-sized predictions.
-        accumulator_device="cpu",
-    )
-    joint_model = _result_item(patched, 0)
-    joint_label = _result_item(patched, 1)
+    # Both providers fuse H3-aligned windows within each sigma step.
+    if native_windows:
+        # Optional native capability: older ComfyUI remains usable with OFF.
+        from comfy_extras.nodes_context_windows import MiniMaxH3ContextWindowsNode
+
+        window_frames, overlap_frames, policy_source = _native_stage2_window_policy(
+            active_model, original_video, original_audio, upres, common
+        )
+        patched = MiniMaxH3ContextWindowsNode.execute(
+            model=active_model, context_length=window_frames,
+            context_overlap=overlap_frames, fuse_method="pyramid",
+            freenoise=False, split_conds_to_windows=False,
+        )
+        joint_model = _result_item(patched, 0)
+        joint_label = policy_source
+        stage2_report = "; stage2=NATIVE_CONTEXT_WINDOWS; " + policy_source
+        LOG.info("FAST LATENT Stage-2 | provider=COMFYUI_NATIVE | %s", policy_source)
+    else:
+        windows_provider = _provider("nodes_windows")
+        total_frames = common.latents_to_frames(int(original_video.shape[2]))
+        length, overlap, _total_f, _total_t, windows = windows_provider._plan(
+            total_frames,
+            int(window_frames),
+            int(overlap_frames),
+            windows_provider.ContextSchedules.STATIC_STANDARD,
+        )
+        patched = windows_provider.MMH3ContextWindows.execute(
+            model=active_model,
+            context_length=int(length),
+            context_overlap=int(overlap),
+            fuse_method=windows_provider.ContextFuseMethods.PYRAMID,
+            context_schedule=windows_provider.ContextSchedules.STATIC_STANDARD,
+            context_stride=1,
+            freenoise=False,
+            split_conds_to_windows=False,
+            # Full-timeline accumulators on GPU leave too little activation headroom
+            # on 12 GB cards and trigger catastrophic WDDM paging. CPU accumulation
+            # preserves the same values and transfers only window-sized predictions.
+            accumulator_device="cpu",
+        )
+        joint_model = _result_item(patched, 0)
+        joint_label = _result_item(patched, 1)
+        stage2_report = ("; stage2=PSKF_JOINT_PER_STEP"
+                         + f"; stage2_window={common.latents_to_frames(int(length))}f/{len(windows)}pass")
+        LOG.info(
+            "FAST LATENT Stage-2 | provider=IAMCCS_INTERNAL | policy=%s | passes=%d | %s | %s",
+            policy_source, len(windows), joint_label, sampling_report,
+        )
     joint_guider = _result_item(
         BasicGuider.execute(model=joint_model, conditioning=conditioning), 0
     )
-    LOG.info(
-        "FAST LATENT 2-PASS Stage-2 PSkf joint refine | provider=IAMCCS_INTERNAL | "
-        "policy=%s | passes=%d | window=%df/%dL | overlap=%df/%dL | total=%df | %s | %s",
-        policy_source,
-        len(windows),
-        common.latents_to_frames(int(length)),
-        int(length),
-        common.frame_at_latent(int(overlap)) if overlap else 0,
-        int(overlap),
-        int(total_frames),
-        joint_label,
-        sampling_report,
-    )
-    sampled = _result_item(
+    sampled = select_sample(
         SamplerCustomAdvanced.execute(
             noise=noise,
             guider=joint_guider,
             sampler=sampler,
             sigmas=sigmas,
             latent_image=latent,
-        ),
-        1,
+        )
     )
     video, audio = common.unpack_av(sampled, "FAST LATENT Stage-2 joint refined")
     if tuple(video.shape) != tuple(original_video.shape):
         raise RuntimeError("FAST LATENT Stage-2 joint refine changed the video latent extent")
-    if original_audio is not None and not torch.equal(original_audio.cpu(), audio.cpu()):
+    if original_audio is not None and (audio is None or not torch.equal(original_audio.cpu(), audio.cpu())):
         raise RuntimeError(
             "FAST LATENT Stage-2 joint refine changed the locked H3 audio latent; "
             "refusing a desynchronised delivery"
@@ -697,8 +783,7 @@ def _sample_stage2(model, conditioning, latent, cine_linx, segment_index):
     return (
         sampled,
         sampling_report
-        + "; stage2=PSKF_JOINT_PER_STEP"
-        + f"; stage2_window={common.latents_to_frames(int(length))}f/{len(windows)}pass",
+        + stage2_report,
     )
 
 
@@ -736,6 +821,7 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
                 "ref_video": ("IMAGE",),
                 "ref_video_audio": ("AUDIO",),
                 "ref_audio": ("AUDIO",),
+                "plate_refine_model": ("MODEL", {"lazy": True}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -750,6 +836,11 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")
 
+    def check_lazy_status(self, cine_linx, plate_refine_model=None, **kwargs):
+        if _resolve_shotplan(cine_linx).get("h3_plate_refine") and plate_refine_model is None:
+            return ["plate_refine_model"]
+        return []
+
     def finish(self, model, clip, video_vae, audio_vae, sampled_latent, stage1_conditioning,
                cine_linx, native_frames, native_audio, resolved_render_id, native_saved_report,
                current_segment, total_segments, context_trim_frames, join_trim_frames,
@@ -757,7 +848,7 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
                first_frame_override=None, last_frame_override=None,
                ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_image_4=None,
                ref_video=None, ref_video_audio=None, ref_audio=None,
-               prompt=None, extra_pnginfo=None):
+               prompt=None, extra_pnginfo=None, plate_refine_model=None):
         import comfy.model_management as mm
         from .iamccs_minimax_h3_shotboard import (
             _concat_videos,
@@ -766,6 +857,8 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             _encode_images,
             _enqueue,
             _joined_frame_count,
+            _read_segment_frame_count,
+            _save_extend_soft_audio_context,
             _trim_audio_frames,
             _write_segment_metadata,
         )
@@ -776,11 +869,22 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             raise ValueError("This workflow is FAST LATENT 2-PASS. Enable that exact upscale route in IAMCCS H3 Settings.")
         if not native_saved_report:
             raise ValueError("FAST LATENT 2-PASS must run after the native H3 checkpoint.")
+        plate_config = plan.get("h3_plate_refine")
+        route_folder = "H3_PLATE_REFINE" if plate_config else "FAST_LATENT_2PASS"
+        route_label = "H3 PLATE REFINE" if plate_config else "FAST LATENT 2-PASS"
+        if plate_config:
+            from . import iamccs_h3_plate_refine as plate_refine
+
+            if plate_refine_model is None:
+                raise ValueError("H3 Plate Refine needs a connected REF2VA model on the delivery node.")
+            plate_refine.window_node()
 
         index, total = int(current_segment), max(1, int(total_segments))
         if index < 0 or index >= total:
             raise ValueError("FAST LATENT 2-PASS received an invalid segment index.")
         chunk = _check_segment_parity(plan, index, total, native_frames, native_audio)
+        extended_mode = plan.get("task_mode") == extended_av.EXTENDED_AV_MODE
+        extended_contract = plan.get("extended_av") if extended_mode else None
         if (
             isinstance(motion_state, dict)
             and str(motion_state.get("method", "")) == "external_saved_av_continuation"
@@ -791,7 +895,10 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
                 "for this continuation render; existing Shotboard/LongVid modes remain supported by Fast Latent."
             )
         run = _safe_render_id(resolved_render_id)
-        root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "FAST_LATENT_2PASS" / run
+        extended_render = f"{run}_FAST_LATENT_HIGH"
+        from .iamccs_h3_output_storage import segment_directory
+        legacy_root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / route_folder / run
+        root = segment_directory(prompt, legacy_root, route_folder, run)
         root.mkdir(parents=True, exist_ok=True)
         output = root / f"segment_{index + 1:04d}.mp4"
         if output.exists():
@@ -808,7 +915,7 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
 
         delivery_width, delivery_height = _delivery_size(plan)
         upres = _upres_settings(plan)
-        final_rtx = bool(upres.get("rtx_requested", False))
+        final_rtx = bool(upres.get("rtx_requested", False)) and not plate_config
 
         # 2026-09-25 R41 canvas-truth fix:
         # h3_upres_tile_width/height are legacy R38 spatial tile controls. They
@@ -847,42 +954,78 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
         )
 
         intermediate = None
+        extended_parent = None
+        if extended_mode and index:
+            extended_parent = extended_av.load_sidecar(extended_render, index - 1)
+            if extended_parent is None:
+                raise RuntimeError(
+                    "FAST LATENT Extended AV needs the previous refined HIGH sidecar. Start at segment 1."
+                )
         try:
             mm.unload_all_models()
             mm.soft_empty_cache()
             stage1_video, stage1_audio = _split_av(sampled_latent)
             upscaled_video = _upscale_video_latent(stage1_video, plan, stage_width, stage_height)
             del stage1_video
-            locked_latent = _locked_av_latent(upscaled_video, stage1_audio)
+            locked_latent = _locked_av_latent(
+                upscaled_video, stage1_audio,
+                extended_parent=extended_parent, extended_contract=extended_contract,
+            )
             del upscaled_video
             mm.unload_all_models()
             mm.soft_empty_cache()
 
-            stage2_first, stage2_last = _stage2_endpoint_images(
-                native_frames, first_frame_override, last_frame_override,
-            )
-            target_model, target_conditioning, conditioning_report = _target_conditioning(
-                model, clip, video_vae, audio_vae, cine_linx, index,
-                stage_width, stage_height, stage1_conditioning, sampled_latent,
-                bridge_frame=bridge_frame,
-                first_frame_override=stage2_first,
-                last_frame_override=stage2_last,
-                ref_image_1=ref_image_1, ref_image_2=ref_image_2,
-                ref_image_3=ref_image_3, ref_image_4=ref_image_4,
-                ref_video=ref_video, ref_video_audio=ref_video_audio, ref_audio=ref_audio,
-                motion_state=motion_state, render_id=run,
-            )
-            mm.unload_all_models()
-            mm.soft_empty_cache()
-            refined, sampling_report = _sample_stage2(
-                target_model, target_conditioning, locked_latent, cine_linx, index,
-            )
+            if plate_config:
+                seed = int(upres.get("seed", -1))
+                if seed < 0:
+                    seed = int(chunk.get("seed", plan.get("seed", 777))) % (2**64)
+                refined, sampling_report = plate_refine.refine(
+                    plate_refine_model, clip, video_vae, sampled_latent, native_frames,
+                    locked_latent, plate_config, seed, plan.get("upscale_settings", {}).get("prompt", ""),
+                )
+                conditioning_report = "REF2VA | aligned Stage 1 plate"
+            else:
+                stage2_first, stage2_last = _stage2_endpoint_images(
+                    native_frames, first_frame_override, last_frame_override,
+                )
+                target_model, target_conditioning, conditioning_report = _target_conditioning(
+                    model, clip, video_vae, audio_vae, cine_linx, index,
+                    stage_width, stage_height, stage1_conditioning, sampled_latent,
+                    bridge_frame=bridge_frame,
+                    first_frame_override=stage2_first,
+                    last_frame_override=stage2_last,
+                    ref_image_1=ref_image_1, ref_image_2=ref_image_2,
+                    ref_image_3=ref_image_3, ref_image_4=ref_image_4,
+                    ref_video=ref_video, ref_video_audio=ref_video_audio, ref_audio=ref_audio,
+                    motion_state=motion_state, render_id=run,
+                )
+                mm.unload_all_models()
+                mm.soft_empty_cache()
+                refined, sampling_report = _sample_stage2(
+                    target_model, target_conditioning, locked_latent, cine_linx, index,
+                )
             del locked_latent
             mm.unload_all_models()
             mm.soft_empty_cache()
 
+            if extended_mode:
+                extended_av.save_sidecar(
+                    extended_render, index, refined, contract=extended_contract,
+                    delivered_frames=frames, pinned_head_frames=trim,
+                    padding_tail_frames=int(chunk.get("extended_av_padding_frames", 0)),
+                    boundary_runway_frames=int(chunk.get("extended_av_boundary_runway_frames", 0)),
+                    grid_padding_frames=chunk.get("extended_av_grid_padding_frames"),
+                    parent_segment_index=index - 1 if index else None,
+                )
+                if extended_parent is not None:
+                    seam = extended_av.latent_seam_report(
+                        refined, extended_parent, overlap_frames=int(extended_contract["overlap_frames"]),
+                    )
+                    extended_av.write_seam_report(extended_render, index, seam)
+                    LOG.info("FAST LATENT Stage-2 EXTEND HIGH seam | %s", seam)
+
             intermediate = _provider_stream_save(
-                refined, video_vae, run, index, int(upres.get("pixel_groups", 1) or 1),
+                refined, video_vae, run, index, int(upres.get("pixel_groups", 1) or 1), route_folder,
             )
             del refined
             if final_rtx:
@@ -892,11 +1035,13 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
                     intermediate, output, audio, trim + (1 if join == 1 else 0), frames,
                     stage_width, stage_height, delivery_width, delivery_height, 24,
                     str(upres.get("rtx_quality", "ULTRA") or "ULTRA").upper(),
+                    exact_audio=extended_mode,
                 )
             else:
                 _finish_segment(
                     intermediate, output, audio, trim + (1 if join == 1 else 0), frames,
                     delivery_width, delivery_height, 24,
+                    exact_audio=extended_mode,
                 )
         finally:
             mm.unload_all_models()
@@ -904,7 +1049,7 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             mm.soft_empty_cache()
 
         provenance = {
-            "render_id": run, "stage": "fast_latent_2pass", "segment_index": index,
+            "render_id": run, "stage": route_folder.lower(), "segment_index": index,
             "total_segments": total, "native_visible_frames": visible,
             "delivery_frames": frames, "context_trim_frames": trim,
             "join_trim_frames": join, "native_audio_locked": True,
@@ -912,9 +1057,13 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             "delivery_canvas": [delivery_width, delivery_height],
             "chunk": chunk, "shotplan": plan,
         }
+        if plate_config or bool(upres.get("fast_latent_stage2_native_windows", False)):
+            provenance["stage2_sampling_report"] = sampling_report
         source_workflow = extra_pnginfo.get("workflow") if isinstance(extra_pnginfo, dict) else None
         _write_segment_metadata(output, frames, 24, "fast_latent_2pass_audio_locked",
                                 provenance=provenance, source_workflow=source_workflow)
+        if extended_mode:
+            _save_extend_soft_audio_context(output, sampled_latent.get("_iamccs_extended_soft_audio"))
         preview = output
         preview_paths = [output]
         if index == total - 1:
@@ -922,7 +1071,25 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             preview = root / "final_film.mp4"
             if preview.exists():
                 raise FileExistsError(f"FAST LATENT 2-PASS final film already exists: {preview}")
-            if join > 1:
+            if extended_mode:
+                expected = sum(int(item["unique_frames"]) for item in plan["chunks"])
+                actual = sum(_read_segment_frame_count(path) for path in paths)
+                if join != 0 or actual != expected:
+                    raise RuntimeError(
+                        f"FAST LATENT Extended AV master geometry mismatch: join={join}f, "
+                        f"delivered={actual}f, authored={expected}f."
+                    )
+                if plan.get("audio_mode") == "h3_custom_audio_drive":
+                    _concat_videos(paths, preview, audio_edge_fade_ms=0.0, audio_join_policy="locked_master")
+                else:
+                    _concat_videos(
+                        paths, preview, audio_edge_fade_ms=5.0, audio_join_policy="extend_soft_av",
+                        extend_soft_av_ms=float(extended_contract.get("soft_audio_handover_ms", 15.0)),
+                        extend_boundary_polish_ms=float(extended_contract.get("boundary_polish_ms", 3.0)),
+                        extend_boundary_polish_strength=float(extended_contract.get("boundary_polish_strength", 1.0)),
+                    )
+                LOG.info("FAST LATENT EXTEND master complete | chunks=%d | frames=%d | masked_trim_butt_join", total, actual)
+            elif join > 1:
                 _concat_videos_overlap(paths, preview, join, 24)
             else:
                 _concat_videos(paths, preview)
@@ -930,7 +1097,7 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             _write_segment_metadata(
                 preview, master_frames,
                 24, "fast_latent_2pass_audio_locked",
-                provenance={"render_id": run, "stage": "fast_latent_2pass_master", "total_segments": total,
+                provenance={"render_id": run, "stage": route_folder.lower() + "_master", "total_segments": total,
                             "segment_files": [path.name for path in paths], "shotplan": plan},
                 source_workflow=source_workflow,
             )
@@ -944,11 +1111,13 @@ class IAMCCS_MiniMaxH3FastLatent2PassR41:
             _enqueue(next_prompt, extra_data=extra, outputs=outputs, sensitive=sensitive)
             queued = True
         report = (
-            f"FAST LATENT 2-PASS saved {index + 1}/{total} | native={plan.get('width')}x{plan.get('height')} "
+            f"{route_label} saved {index + 1}/{total} | native={plan.get('width')}x{plan.get('height')} "
             f"-> stage2={stage_width}x{stage_height} -> delivery={delivery_width}x{delivery_height} | "
             f"audio=exact native lock | next queued={queued} | {preview}"
         )
         LOG.info("%s | %s | %s", report, conditioning_report, sampling_report)
+        if plate_config or bool(upres.get("fast_latent_stage2_native_windows", False)):
+            report += f" | {sampling_report}"
         return {
             "ui": {
                 "text": [report],

@@ -163,9 +163,12 @@ def _finish_segment(intermediate, output, audio, trim, frames, width, height, fp
             audio_filter = ["-af", f"apad,atrim=duration={frames / fps:.9f},asetpts=PTS-STARTPTS"]
             audio_encode = ["-c:a", "aac", "-b:a", "192k"]
         vf = f"trim=start_frame={trim}:end_frame={trim + frames},setpts=PTS-STARTPTS,crop={width}:{height}"
+        # The trim filter already bounds the video. An output frame limit can
+        # stop ffmpeg before it has drained the exact-length native audio.
+        video_limit = [] if exact_audio else ["-frames:v", str(frames)]
         command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
                    "-i", str(intermediate), *audio_input, "-map", "0:v:0", "-map", "1:a:0",
-                   "-vf", vf, "-frames:v", str(frames), "-r", str(fps),
+                   "-vf", vf, *video_limit, "-r", str(fps),
                    *audio_filter,
                    "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p",
                    *audio_encode, "-movflags", "+faststart", str(output)]
@@ -317,9 +320,11 @@ def _rtx_finish_segment(intermediate, output, audio, trim, frames, crop_width, c
             audio_input = ["-i",str(wav)]
             audio_filter = ["-af",f"apad,atrim=duration={frames/fps:.9f},asetpts=PTS-STARTPTS"]
             audio_encode = ["-c:a","aac","-b:a","192k"]
+        # The producer writes exactly frames RGB frames, then closes stdin.
+        video_limit = [] if exact_audio else ["-frames:v", str(frames)]
         command = [ffmpeg,"-hide_banner","-loglevel","error","-nostdin","-n",
             "-f","rawvideo","-pix_fmt","rgb24","-s",f"{width}x{height}","-r",str(fps),"-i","pipe:0",
-            *audio_input,"-map","0:v:0","-map","1:a:0","-frames:v",str(frames),
+            *audio_input,"-map","0:v:0","-map","1:a:0",*video_limit,
             *audio_filter,
             "-c:v","libx264","-preset","medium","-crf","16","-pix_fmt","yuv420p",
             *audio_encode,"-movflags","+faststart",str(output)]
@@ -478,7 +483,9 @@ class IAMCCS_MiniMaxH3PixelRefineR38B:
                 run, index + 1, total, tail_frames, unique_frames, handoff_endpoint_frames,
             )
 
-        root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "R38B" / run
+        from .iamccs_h3_output_storage import segment_directory
+        legacy_root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / "R38B" / run
+        root = segment_directory(prompt, legacy_root, "R38B", run)
         root.mkdir(parents=True, exist_ok=True)
         output = root / f"segment_{index + 1:04d}.mp4"
         if output.exists():
@@ -630,6 +637,32 @@ class IAMCCS_MiniMaxH3PixelRefineR38B:
                     "R38B EXTEND hidden Soft-AV audio mirrored | segment=%d/%d | path=%s",
                     index + 1, total, _soft_audio_path,
                 )
+        from .iamccs_h3_output_storage import managed_prompt
+        from . import iamccs_h3_vsr_segments as vsr
+
+        # Overlap-based deliveries still use VSR on the assembled master.
+        overlap_delivery = join > 1 or (isinstance(tail_cfg, dict) and bool(tail_cfg.get("enabled"))) or any(
+            isinstance(chunk, dict) and int(chunk.get("overlap_frames") or 0) > 1
+            for chunk in plan.get("chunks") or []
+        )
+        segmented_vsr = False
+        if managed_prompt(prompt) and vsr.enabled(plan) and not overlap_delivery:
+            from .iamccs_minimax_h3_editor_delivery import IAMCCS_MiniMaxH3EditorOptionalFinalR45
+
+            segmented_vsr = not IAMCCS_MiniMaxH3EditorOptionalFinalR45._enabled(cine_linx)
+        if segmented_vsr:
+            vsr_root = root / "VSR"
+            native_paths = [root / f"segment_{part + 1:04d}.mp4" for part in range(index + 1)]
+            delivered_paths = [vsr_root / path.name for path in native_paths]
+            LOG.info("R49 VSR second pass | segment=%d/%d | %s", index + 1, total, output)
+            vsr.upscale_segment(native_paths, delivered_paths[-1], plan["final_finish"],
+                                previous_outputs=delivered_paths[:-1])
+            _write_segment_metadata(
+                delivered_paths[-1], frames, 24, "audio_from_native_master",
+                provenance={"render_id": run, "stage": "vsr_segment", "segment_index": index,
+                            "total_segments": total, "shotplan": plan},
+                source_workflow=source_workflow,
+            )
         preview = output
         if index == total - 1:
             paths = [root / f"segment_{i + 1:04d}.mp4" for i in range(total)]
@@ -702,6 +735,17 @@ class IAMCCS_MiniMaxH3PixelRefineR38B:
                             "shotplan": plan},
                 source_workflow=source_workflow,
             )
+            if segmented_vsr:
+                native_master = preview
+                preview = vsr_root / "final_film.mp4"
+                vsr.assemble(delivered_paths, [_read_segment_frame_count(path) for path in paths],
+                             native_master, preview)
+                _write_segment_metadata(
+                    preview, _read_segment_frame_count(native_master), 24, "native_master_audio_stream_copy",
+                    provenance={"render_id": run, "stage": "vsr_segmented_master", "vsr_segmented": True,
+                                "segment_files": [path.name for path in delivered_paths], "shotplan": plan},
+                    source_workflow=source_workflow,
+                )
         queued = False
         if bool(queue_next_segment) and index + 1 < total:
             live, extra, outputs, sensitive = _current_prompt()
@@ -709,9 +753,14 @@ class IAMCCS_MiniMaxH3PixelRefineR38B:
             _enqueue(next_prompt, extra_data=extra, outputs=outputs, sensitive=sensitive)
             queued = True
         report = f"R38B saved {index + 1}/{total} | {frames}f | native audio preserved | next queued={queued} | {preview}"
+        preview_files = [preview]
+        if segmented_vsr and index < total - 1:
+            report += f" | VSR segment saved: {delivered_paths[-1]}"
+            preview_files.append(delivered_paths[-1])
         LOG.info(report)
-        return {"ui": {"text": [report], "images": [{"filename": preview.name,
-                "subfolder": preview.parent.relative_to(Path(folder_paths.get_output_directory())).as_posix(), "type": "output"}],
+        return {"ui": {"text": [report], "images": [{"filename": file.name,
+                "subfolder": file.parent.relative_to(Path(folder_paths.get_output_directory())).as_posix(), "type": "output"}
+                for file in preview_files],
                 "animated": (True,)}, "result": (str(preview), report)}
 
 

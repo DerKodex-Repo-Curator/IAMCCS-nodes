@@ -401,6 +401,7 @@ class IAMCCS_MiniMaxH3UniversalFastR42(IAMCCS_MiniMaxH3FastLatent2PassR41):
             cine_linx = args[6]
         route = _route(cine_linx)
         if route == ULTIMATE_ROUTE:
+            kwargs.pop("plate_refine_model", None)
             kwargs["queue_next_segment"] = True
             return IAMCCS_MiniMaxH3UltimateTiledDelivery().finish(*args, **kwargs)
         if route != FAST_ROUTE:
@@ -500,7 +501,9 @@ class IAMCCS_MiniMaxH3UniversalRTXFinalR42:
 
         run = _safe_name(str(resolved_render_id or "").strip(), "minimax_h3_render")
         route_label = "RTX_FINAL" if route == RTX_FINAL_ROUTE else "PIXEL_SAFE"
-        root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / route_label / run
+        from .iamccs_h3_output_storage import segment_directory
+        legacy_root = Path(folder_paths.get_output_directory()) / "IAMCCS" / "MiniMaxH3" / route_label / run
+        root = segment_directory(prompt, legacy_root, route_label, run)
         root.mkdir(parents=True, exist_ok=True)
         output = root / f"segment_{index + 1:04d}.mp4"
         if output.exists():
@@ -719,6 +722,8 @@ class IAMCCS_MiniMaxH3UniversalMasterSaveR42:
         if not isinstance(master_audio, dict) or not torch.is_tensor(master_audio.get("waveform")):
             raise ValueError(f"R42 selected {route}, but the native master AUDIO is not connected")
         run = _safe_name(str(resolved_render_id or "").strip(), "minimax_h3_render")
+        from .iamccs_h3_output_storage import managed_prompt, segment_directory
+
         if route == LTX_PER_CHUNK_ROUTE:
             if current_segment is None or total_segments is None:
                 raise ValueError("LTX per-shot requires current_segment and total_segments connections")
@@ -731,6 +736,7 @@ class IAMCCS_MiniMaxH3UniversalMasterSaveR42:
                 / run
                 / "LTX_PER_SHOT"
             )
+            root = segment_directory(prompt, root, "LTX_PER_SHOT", run)
             root.mkdir(parents=True, exist_ok=True)
             output = root / f"segment_{index + 1:04d}.mp4"
             if output.exists():
@@ -748,6 +754,20 @@ class IAMCCS_MiniMaxH3UniversalMasterSaveR42:
                 next_prompt = _next_prompt(live if live is not None else prompt, run, index + 1)
                 _enqueue(next_prompt, extra_data=extra, outputs=outputs, sensitive=sensitive)
                 queued = True
+            if managed_prompt(prompt) and index + 1 == total:
+                from .iamccs_minimax_h3_shotboard import _joined_frame_count
+                paths = [root / f"segment_{i + 1:04d}.mp4" for i in range(total)]
+                output = root / "final_film.mp4"
+                if output.exists():
+                    raise FileExistsError(f"R49 refuses to overwrite existing master: {output}")
+                _concat_videos(paths, output)
+                _write_segment_metadata(
+                    output, _joined_frame_count(paths), max(1, int(fps)), "editorial_hard_cut",
+                    provenance={"render_id": run, "stage": "ltx_per_shot_master",
+                                "total_segments": total, "segment_files": [path.name for path in paths],
+                                "shotplan": _resolve_shotplan(cine_linx)},
+                    source_workflow=extra_pnginfo.get("workflow") if isinstance(extra_pnginfo, dict) else None,
+                )
             report = (
                 f"LTX per-shot delivery saved | segment={index + 1}/{total} | "
                 f"frames={int(selected.shape[0])} | audio=segment locked | next queued={queued} | {output}"
@@ -755,7 +775,8 @@ class IAMCCS_MiniMaxH3UniversalMasterSaveR42:
             LOG.info(report)
             return str(output), report
 
-        root = Path(folder_paths.get_output_directory()) / Path(str(filename_prefix).replace("\\", "/"))
+        legacy_root = Path(folder_paths.get_output_directory()) / Path(str(filename_prefix).replace("\\", "/"))
+        root = segment_directory(prompt, legacy_root, route, run)
         root.mkdir(parents=True, exist_ok=True)
         output = root / f"{run}_{route}_full.mp4"
         if output.exists():

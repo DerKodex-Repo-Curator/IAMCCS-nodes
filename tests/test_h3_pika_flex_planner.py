@@ -18,11 +18,11 @@ CORE = load("iamccs_minimax_h3_shotboard_core")
 PIKA = load("iamccs_h3_pika_flex")
 
 
-def compile_plan(mode, acceleration):
+def compile_plan(mode, acceleration, duration=5):
     return CORE.build_shotplan(
         timeline_data={"fps": 24, "rows": []},
         global_prompt="A knight walks through the forest.",
-        duration_seconds=5,
+        duration_seconds=duration,
         task_mode=mode,
         width=864,
         height=480,
@@ -46,6 +46,19 @@ class PikaPlannerTests(unittest.TestCase):
                 self.assertEqual(plan["sampling"], {"seed": 2026080901, **PIKA.VALUES})
                 self.assertTrue(plan["chunks"])
                 self.assertEqual(plan["pika_flex"]["sigmas"], PIKA.SIGMAS)
+
+    def test_extended_av_keeps_native_windows_and_raw_overlap(self):
+        for mode in ("fl2va_extended_av", "t2va_continuous"):
+            with self.subTest(mode=mode):
+                native = compile_plan(mode, "native", 20.75)
+                plan = compile_plan(mode, PIKA.PROFILE, 20.75)
+                plan["sampling"] = {"seed": 2026080901}
+                PIKA.configure(plan, {})
+                self.assertEqual(plan["task_mode"], "fl2va_extended_av")
+                self.assertEqual(plan["chunks"], native["chunks"])
+                self.assertGreater(len(plan["chunks"]), 1)
+                self.assertGreater(plan["chunks"][1]["extended_av_context_prefix_frames"], 0)
+                self.assertEqual(plan["sampling"], {"seed": 2026080901, **PIKA.VALUES})
 
     def test_existing_acceleration_plans_are_unchanged(self):
         native = compile_plan("t2va", "native")

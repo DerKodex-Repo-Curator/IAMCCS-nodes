@@ -7,7 +7,7 @@ const extract = name => {
   const start = source.indexOf(`function ${name}(`);
   return source.slice(start, source.indexOf('\n}\n', start) + 2);
 };
-for (const mode of ['t2va', 'ref2va']) {
+for (const mode of ['t2va', 'ref2va', 'fl2va_extended_av', 't2va_continuous']) {
   const values = {acceleration:'fasth3_dense_6step', turbo_mode:'lightx2v', h3_omni_enabled:true,
     turbo_lora_name:'old-speed', pdd_lora_name:'old-pdd', steps:8, sampler_name:'euler',
     pika_flex_fl2va_lora:'', pika_flex_ref2va_lora:''};
@@ -32,4 +32,4 @@ for (const mode of ['t2va', 'ref2va']) {
   assert.equal(context.selected(node),'native');
   assert.equal(widget(node,'steps').value,20);
 }
-console.log('PASS: Pika selection replaces old speed/Omni recipes, synchronizes six-NFE fields and returns to Native in both model families.');
+console.log('PASS: Pika selection replaces old speed/Omni recipes, synchronizes six-NFE fields and returns to Native in both model families and Extended AV modes.');

@@ -2,7 +2,6 @@ import { app } from "../../scripts/app.js";
 
 const SEED_MODES = new Set(["fixed", "randomize", "increment", "decrement"]);
 const NODE_DEFAULTS = {
-    IAMCCS_QwenMultiGen: [0, "randomize", 4, 1, "euler", "simple", 1, "\\n", "index_timestep_zero", "qwen_multi", true],
     IAMCCS_FluxKleinMultiGen: [0, "randomize", 8, 1, "euler", "\\n", "workflow_default", 1, "nearest-exact", "", "flux_klein_multi", false, 1, 720, 1024, false, "flux_klein_debug"],
 };
 
@@ -76,6 +75,36 @@ app.registerExtension({
     name: "iamccs.qwen_multigen.compat",
 
     async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData?.name === "IAMCCS_QwenMultiGen") {
+            const methods = nodeData.input.optional.reference_latents_method[0];
+            const configure = nodeType.prototype.configure;
+            nodeType.prototype.configure = function (info, ...args) {
+                const values = info?.widgets_values;
+                const methodIndex = values?.length - 3;
+                const hasSeedMode = SEED_MODES.has(values?.[1]);
+                const legacyLength = hasSeedMode ? 11 : 10;
+                if (Array.isArray(values) && values.length === legacyLength
+                    && methods.includes(values[methodIndex]) && typeof values[methodIndex + 1] === "string"
+                    && typeof values[methodIndex + 2] === "boolean") {
+                    const migrated = [...values];
+                    if (!hasSeedMode) migrated.splice(1, 0, "randomize");
+                    migrated.splice(7, 0, "");
+                    info = { ...info, widgets_values: migrated };
+                    if (info.widgets_values_named) {
+                        info.widgets_values_named = {
+                            ...info.widgets_values_named,
+                            negative_prompt: migrated[7],
+                            separator: migrated[8],
+                            reference_latents_method: migrated[9],
+                            output_prefix: migrated[10],
+                            save_images: migrated[11],
+                        };
+                    }
+                }
+                return configure.call(this, info, ...args);
+            };
+            return;
+        }
         if (!NODE_DEFAULTS[nodeData?.name]) return;
 
         const originalOnNodeCreated = nodeType.prototype.onNodeCreated;

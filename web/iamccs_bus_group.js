@@ -359,11 +359,24 @@ function isColorNear(a, b, tolerance) {
     return (dr + dg + db) <= t;
 }
 
+function isBusGroupRowWidget(widget) {
+    return widget?._iamccsBusWidgetKind === "row";
+}
+
+function isBusGroupMacroRowWidget(widget) {
+    return widget?._iamccsBusWidgetKind === "macro";
+}
+
+function isBusGroupDividerWidget(widget) {
+    return widget?._iamccsBusWidgetKind === "divider";
+}
+
 class BusGroupSpacerWidget {
     constructor(height = 8 * UI_SCALE) {
         this.type = "custom";
         this.name = "iamccs_bus_group_spacer";
         this.label = "";
+        this.serialize = false;
         this.options = { serialize: false };
         this._height = Math.max(2 * UI_SCALE, Number(height) || 8 * UI_SCALE);
     }
@@ -381,7 +394,9 @@ class BusGroupDividerWidget {
     constructor() {
         this.type = "custom";
         this.name = "iamccs_bus_group_divider";
+        this._iamccsBusWidgetKind = "divider";
         this.label = "";
+        this.serialize = false;
         this.options = { serialize: false };
         this._height = 10 * UI_SCALE;
     }
@@ -499,7 +514,7 @@ function _computeRowCentersLocalY(node) {
             if (Array.isArray(sz) && Number.isFinite(sz[1])) h = sz[1];
         } catch {}
 
-        if (w instanceof BusGroupRowWidget) {
+        if (isBusGroupRowWidget(w)) {
             centers.push(y + h * 0.5);
         }
 
@@ -553,8 +568,11 @@ class BusGroupRowWidget {
     constructor(group, node) {
         this.type = "custom";
         this.name = "iamccs_bus_group_row";
+        this._iamccsBusWidgetKind = "row";
         this.label = "";
-        this.options = { serialize: true };
+        // Mute and solo are persisted in bus_group_state by group ID.
+        this.serialize = false;
+        this.options = { serialize: false };
         this.value = { mute: false, solo: false };
         this.group = group;
         this.node = node;
@@ -567,10 +585,6 @@ class BusGroupRowWidget {
         if (this._iamccsHiddenByShowMode) return [0, 0];
         const w = Number.isFinite(width) ? width : BASE_NODE_WIDTH;
         return [Math.max(MIN_ROW_WIDTH, w), this._height];
-    }
-
-    serializeValue() {
-        return this.value;
     }
 
     _toggleMute() {
@@ -880,8 +894,10 @@ class BusGroupMacroRowWidget {
     constructor(macro, node) {
         this.type = "custom";
         this.name = "iamccs_bus_group_macro_row";
+        this._iamccsBusWidgetKind = "macro";
         this.label = "";
-        this.options = { serialize: true };
+        this.serialize = false;
+        this.options = { serialize: false };
         this.macro = macro;
         this.node = node;
         // Tighter spacing between macros, but with a larger usable box area.
@@ -895,7 +911,7 @@ class BusGroupMacroRowWidget {
 
     _iterTargetRows() {
         const keys = Array.isArray(this.macro?.keys) ? this.macro.keys : [];
-        const rows = (this.node?.widgets || []).filter(w => w instanceof BusGroupRowWidget);
+        const rows = (this.node?.widgets || []).filter(isBusGroupRowWidget);
         const byKey = new Map(rows.map(r => [getGroupKey(r.group), r]));
         const out = [];
         for (const k of keys) {
@@ -1149,7 +1165,7 @@ class BusGroupMacroRowWidget {
 }
 
 function rebuildWidgets(node) {
-    const graph = getGraph();
+    const graph = node.graph;
     if (!graph) return;
 
     node.properties = node.properties || {};
@@ -1174,19 +1190,12 @@ function rebuildWidgets(node) {
     // Always remove slots: this is now a socket-less controller UI.
     try { _removeAllSlots(node); } catch {}
 
-    // Keep only non-row widgets and rebuild rows.
-    const keep = [];
-    for (const w of node.widgets || []) {
-        // Divider widgets are dynamically inserted during rebuild; do not keep them or they will duplicate.
-        if (
-            !(w instanceof BusGroupRowWidget) &&
-            !(w instanceof BusGroupMacroRowWidget) &&
-            !(w instanceof BusGroupDividerWidget)
-        ) {
-            keep.push(w);
-        }
+    const isDynamicWidget = (w) => isBusGroupRowWidget(w) || isBusGroupMacroRowWidget(w) || isBusGroupDividerWidget(w);
+    if (typeof node.removeWidget === "function") {
+        for (const widget of (node.widgets || []).filter(isDynamicWidget)) node.removeWidget(widget);
+    } else {
+        node.widgets = (node.widgets || []).filter(w => !isDynamicWidget(w));
     }
-    node.widgets = keep;
 
     const groups = getGroups(graph).filter(g => _matchesGroupFilters(node, g));
 
@@ -1298,10 +1307,10 @@ function rebuildWidgets(node) {
 }
 
 function applyModes(node) {
-    const graph = getGraph();
+    const graph = node.graph;
     if (!graph) return;
 
-    const rows = (node.widgets || []).filter(w => w instanceof BusGroupRowWidget);
+    const rows = (node.widgets || []).filter(isBusGroupRowWidget);
 
     // Persist widget state.
     node.properties = node.properties || {};
@@ -1364,7 +1373,7 @@ function applyReceiverModes(node) {
     const graph = getGraph();
     if (!graph) return;
 
-    const rows = (node.widgets || []).filter(w => w instanceof BusGroupRowWidget);
+    const rows = (node.widgets || []).filter(isBusGroupRowWidget);
 
     // Receiver is now the same socket-less controller as main.
     // Keep for backward compatibility but do not mirror via links.
@@ -1759,7 +1768,7 @@ app.registerExtension({
             if (!isReceiver) this.addWidget("button", "Mute all", null, () => {
                 if (this.properties?.iamccs_bus_group_lock_groups) return;
                 for (const w of this.widgets || []) {
-                    if (w instanceof BusGroupRowWidget) {
+                    if (isBusGroupRowWidget(w)) {
                         w.value.mute = true;
                         w.value.solo = false;
                     }
@@ -1769,7 +1778,7 @@ app.registerExtension({
             if (!isReceiver) this.addWidget("button", "Enable all", null, () => {
                 if (this.properties?.iamccs_bus_group_lock_groups) return;
                 for (const w of this.widgets || []) {
-                    if (w instanceof BusGroupRowWidget) {
+                    if (isBusGroupRowWidget(w)) {
                         w.value.mute = false;
                         w.value.solo = false;
                     }
@@ -1848,12 +1857,13 @@ app.registerExtension({
         const onDrawForeground = nodeType.prototype.onDrawForeground;
         nodeType.prototype.onDrawForeground = function (ctx) {
             try {
-                const graph = getGraph();
-                const sig = getGroups(graph).map(getGroupKey).join("|");
+                const sig = getGroups(this.graph).filter(group => _matchesGroupFilters(this, group)).map(getGroupKey).join("|");
                 if (sig !== this._iamccsLastGroupSig) {
                     // Debounce via timeout to avoid rebuild inside draw.
-                    clearTimeout(this._iamccsRefreshTimeout);
-                    this._iamccsRefreshTimeout = setTimeout(() => this._iamccsRefresh?.(), 50);
+                    this._iamccsRefreshTimeout ??= setTimeout(() => {
+                        this._iamccsRefreshTimeout = null;
+                        this._iamccsRefresh?.();
+                    }, 50);
                 }
 
                 // Receiver indicator
